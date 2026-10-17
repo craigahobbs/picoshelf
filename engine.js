@@ -1,8 +1,9 @@
-// The audiobook playback engine - the timeline is the book's text: it is split into units (sentences, long ones at
-// semicolons and colons, and paragraphs at blank lines), which a Web Worker synthesizes on demand a few minutes ahead of
-// the position. Playback schedules each unit's streamed blocks with Web Audio, and only the audio near the position is
-// kept, so a whole book costs no more than a chapter.
+// The audiobook playback engine - the timeline is the book's text: it is split into units (PicoVox's sentences, long ones
+// at semicolons and colons, and paragraphs at blank lines - picovox/lib/sentences.js), which a Web Worker synthesizes on
+// demand a few minutes ahead of the position. Playback schedules each unit's streamed blocks with Web Audio, and only the
+// audio near the position is kept, so a whole book costs no more than a chapter.
 
+import {speechText, splitSentences} from './picovox/lib/sentences.js';
 import {encodeWav} from './picovox/lib/wav.js';
 
 
@@ -15,104 +16,15 @@ const playThroughMarginSeconds = 0.5;
 const stallLeadSeconds = 0.03;
 
 
-// The synthesis window - synthesize at most this many units (and characters) ahead of the position, keep this many units
-// of audio behind it, and split sentences longer than this many characters at semicolons and colons (phrase boundaries)
+// The synthesis window - synthesize at most this many units (and characters) ahead of the position, and keep this many
+// units of audio behind it
 const windowUnits = 40;
 const windowChars = 2500;
 const keepBehindUnits = 8;
-const longSentenceChars = 200;
 
 
 // The initial speaking rate estimate (characters per second at rate 1), refined by measurement
 const defaultCharsPerSecond = 14;
-
-
-// Abbreviations that don't end sentences
-const abbreviations = new Set([
-    'mr', 'mrs', 'ms', 'dr', 'st', 'vs', 'etc', 'jr', 'sr', 'prof', 'mt', 'no', 'vol', 'fig', 'ch', 'esq', 'rev', 'capt', 'col', 'gen', 'lt'
-]);
-
-
-// Split text into units (sentences, long sentences at semicolons and colons, and paragraphs at blank lines) - [{index,
-// start, end, text, paragraphStart}]. The worker pauses longer before a paragraph's first unit than between sentences.
-export function splitUnits(text) {
-    const units = [];
-    let start = 0;
-    let paragraphStart = true;
-    const addUnit = (end, endsParagraph) => {
-        const unitText = text.slice(start, end);
-        if (/[A-Za-z0-9]/.test(unitText)) {
-            const leading = unitText.length - unitText.trimStart().length;
-            units.push({
-                'index': units.length, 'start': start + leading, 'end': start + unitText.trimEnd().length,
-                'text': unitText.trim().replace(/\s+/g, ' '), paragraphStart
-            });
-            paragraphStart = false;
-        }
-        if (endsParagraph) {
-            paragraphStart = true;
-        }
-        start = end;
-    };
-    for (let ix = 0; ix < text.length; ix++) {
-        const char = text[ix];
-        if (char === '\n' && /^\n[ \t\r]*\n/.test(text.slice(ix, ix + 40))) {
-            addUnit(ix, true);
-        } else if ((char === ';' || char === ':') && ix - start > longSentenceChars && /\s/.test(text[ix + 1] || ' ')) {
-            addUnit(ix + 1, false);
-        } else if ('.!?'.includes(char)) {
-            let end = ix + 1;
-            while (end < text.length && '.!?"\')]”’'.includes(text[end])) {
-                end++;
-            }
-            if (end < text.length && !/\s/.test(text[end])) {
-                continue;
-            }
-            const word = text.slice(Math.max(start, ix - 20), ix).match(/([A-Za-z]+)$/);
-            if (char === '.' && word !== null && (abbreviations.has(word[1].toLowerCase()) || /^[A-Z]$/.test(word[1]))) {
-                continue;
-            }
-            addUnit(end, false);
-            ix = end - 1;
-        }
-    }
-    addUnit(text.length, true);
-    return units;
-}
-
-
-// Headings numbered with Roman numerals ('Chapter IV') - the label and the numeral
-const headingLabels = [
-    'Chapter', 'CHAPTER', 'Book', 'BOOK', 'Part', 'PART', 'Volume', 'VOLUME', 'Act', 'ACT', 'Scene', 'SCENE', 'Stave', 'STAVE',
-    'Letter', 'LETTER', 'Canto', 'CANTO', 'Section', 'SECTION'
-];
-const romanHeadingPattern = new RegExp(`\\b(${headingLabels.join('|')})\\s+([IVXLCDM]+)\\b`, 'g');
-
-
-// A Roman numeral's value
-function romanValue(roman) {
-    const values = {'I': 1, 'V': 5, 'X': 10, 'L': 50, 'C': 100, 'D': 500, 'M': 1000};
-    let total = 0;
-    for (let ix = 0; ix < roman.length; ix++) {
-        const value = values[roman[ix]];
-        total += ix + 1 < roman.length && values[roman[ix + 1]] > value ? -value : value;
-    }
-    return total;
-}
-
-
-// A unit's text for speaking - the display text keeps its typography, but the synthesizer gets dashes as pauses,
-// ellipses as periods, no invisible formatting characters, and Roman-numeral headings as numbers ('Chapter IV' ->
-// 'Chapter 4')
-export function speechText(text) {
-    return text.
-        replace(/[\u2060\u00ad\u200b\ufeff]/g, '').
-        replace(/[\u200a\u2009\u202f\u00a0]/g, ' ').
-        replace(/\s*[\u2014\u2013]+\s*/g, ', ').
-        replace(/\u2026/g, '...').
-        replace(romanHeadingPattern, (match, label, roman) => `${label} ${romanValue(roman)}`).
-        replace(/^([IVXLCDM]+)\.$/, (match, roman) => `${romanValue(roman)}.`);
-}
 
 
 // The engine - load a book, then play, pause, skip, and seek. onChange(state) is called when the state changes (playing,
@@ -123,8 +35,8 @@ function isAppleMobile() {
 }
 
 
-// Import the generated model modules (lib/models/) once for every worker - each worker's own import would download them
-// again - as the workers' models message. A failed import (a dropped request, say) is tried once more.
+// Import the generated model modules (picovox/lib/models/) once for every worker - each worker's own import would
+// download them again - as the workers' models message. A failed import (a dropped request, say) is tried once more.
 function importModels(voiceModelUrl = './picovox/lib/models/voiceModel.js', retry = true) {
     return Promise.all([import('./picovox/lib/models/g2pModel.js'), import(voiceModelUrl)]).then(([g2p, voice]) => ({
         'type': 'models',
@@ -250,7 +162,7 @@ export class Engine {
         // The speaking rate is measured afresh for each book, voice, and rate
         this.measuredChars = 0;
         this.measuredSeconds = 0;
-        const units = splitUnits(text);
+        const units = splitSentences(text);
         this.session = {
             text, units, voice, rate, 'runs': [], 'runIds': new Set(),
             'cache': units.map(() => ({'blocks': [], 'length': 0, 'done': false, 'run': null, 'startedAt': null}))

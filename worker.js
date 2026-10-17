@@ -7,43 +7,26 @@
 //   posting {'type': 'unitStart', 'id', 'unit'}, {'type': 'unitBlock', 'id', 'unit', 'samples', 'sampleRate'}, and
 //   {'type': 'unitDone', 'id', 'unit'} for each, then {'type': 'runDone', 'id'}. A newer run or a cancel supersedes a run between units.
 // - {'type': 'models', 'g2pModel', 'voiceModel': {'manifest', 'encoding', 'weights'}} - the generated model modules
-//   (lib/models/), imported once by the engine for all of its workers (a worker's own import would download them again).
+//   (picovox/lib/models/), imported once by the engine for all of its workers (a worker's own import would download them
+//   again).
 //   The worker waits for it before loading either network. Its slowdown (default 1) stretches each unit's synthesis that
 //   many times, by waiting - to reproduce a device slower than real time.
 // - {'type': 'prepare', 'voice'} loads the voice's model ahead of playback.
 // - {'type': 'cancel'} stops the current run.
 // Messages out also include {'type': 'ready'} (the G2P network is loaded) and {'type': 'error', 'id', 'message'}.
 //
-// A voice is a speaker of the multi-speaker neural model (nn/js), a generated module (lib/models/voiceModel.js) unpacked on first
-// use.
+// A voice is a voice of PicoVox's multi-speaker neural model (picovox/lib/models/voiceModel.js), unpacked on first use,
+// and a unit is spoken by PicoVox's synthesis pipeline (picovox/lib/synthesis.js) - picovox/ is a copy of the npm
+// package picovox's lib/ (make picovox).
 
+import {defaultSampleRate, paragraphPause, sentenceBlocks, sentencePause, voiceSpeaker} from './picovox/lib/synthesis.js';
 import {setPronouncer, textToPhrases} from './picovox/lib/lexicon.js';
-import {createRenderer} from './picovox/nn/js/render.js';
 import {loadG2p} from './picovox/lib/g2p.js';
-import {loadPackagedModel} from './picovox/nn/js/package.js';
-import {streamFrames} from './picovox/nn/js/model.js';
+import {loadPackagedModel} from './picovox/lib/package.js';
 
 
-// The neural voices - each a speaker (by key) of the multi-speaker model's speaker table
-export const neuralVoices = {'neural-male': {'speaker': 'arctic-bdl'}, 'neural-female': {'speaker': 'arctic-slt'}};
-
-
-// Neural playback - the output gain (the multi-speaker model's speech runs about 2 dB below the earlier single-speaker
-// voices', whose gain was 1.05), and the pauses before a sentence and a paragraph (s, at normal speed - the model's own
-// edge silences are short)
-export const neuralGain = 1.3;
-const neuralSentencePause = 0.24;
-const neuralParagraphPause = 0.4;
-
-
-// A soft limiter - linear below 0.8, approaching 1 above
-export function softLimit(value) {
-    const magnitude = Math.abs(value);
-    if (magnitude <= 0.8) {
-        return value;
-    }
-    return Math.sign(value) * (0.8 + 0.2 * Math.tanh((magnitude - 0.8) / 0.2));
-}
+// The app's voices - each a PicoVox voice (by key)
+export const neuralVoices = {'neural-male': 'male', 'neural-female': 'female'};
 
 
 // Load the multi-speaker neural model - imported and unpacked once, shared by every neural voice. importModule is the
@@ -66,46 +49,17 @@ export function loadNeuralModel(importModule = () => import('./picovox/lib/model
 }
 
 
-// A neural voice's speaker id in the model's speaker table
+// An app voice's speaker id in the model's speaker table
 export function neuralSpeaker(model, voice) {
-    const {speaker} = neuralVoices[voice];
-    const entry = model.manifest.speakers.find((item) => item.key === speaker);
-    if (!entry) {
-        throw new Error(`The ${voice} voice's speaker (${speaker}) isn't in the model.`);
-    }
-    return entry.id;
+    return voiceSpeaker(model, neuralVoices[voice]);
 }
 
 
-// Stream a unit (sentence) with a neural model - a pause, then the unit's audio - calling onBlock(samples, sampleRate).
-// rate is the speaking speed (1 is normal); paragraphStart lengthens the pause.
-export function streamNeuralUnit(model, text, options, onBlock) {
-    const {rate = 1, seed = 1, paragraphStart = false, speaker} = options;
-    // 24 kHz - the voices' training rate (their content stops below 10.5 kHz), at about half 44.1 kHz's rendering cost
-    const sampleRate = 24000;
-    const pause = paragraphStart ? neuralParagraphPause : neuralSentencePause;
-    onBlock(new Float32Array(Math.round(sampleRate * pause / rate)), sampleRate);
-    // The network streams its frames a fraction of a second at a time, each chunk rendered as it comes
-    let networkMs = 0;
-    let networkStart = performance.now();
-    const {chunks, eq} = streamFrames(model, text, {'rate': 1 / rate, speaker});
-    const renderer = createRenderer({sampleRate, seed, eq, 'blockSize': 2048, 'onBlock': (block) => {
-        const samples = new Float32Array(block.length);
-        for (let ix = 0; ix < block.length; ix++) {
-            samples[ix] = softLimit(block[ix] * neuralGain);
-        }
-        onBlock(samples, sampleRate);
-    }});
-    for (const chunk of chunks) {
-        networkMs += performance.now() - networkStart;
-        for (const frame of chunk) {
-            renderer.push([frame]);
-        }
-        networkStart = performance.now();
-    }
-    networkMs += performance.now() - networkStart;
-    options.onNetwork?.(networkMs);
-    renderer.end();
+// A unit's (sentence's) audio - a pause, then the unit's audio, at PicoVox's sample rate (defaultSampleRate) - as an
+// iterator of blocks (Float32Array) made as they're taken. options: speaker (neuralSpeaker), rate (the speaking speed - 1
+// is normal), seed (the renderer's noise seed), and paragraphStart (a longer pause).
+export function unitBlocks(model, text, {speaker, rate = 1, seed = 1, paragraphStart = false}) {
+    return sentenceBlocks(model, text, {speaker, rate, seed, 'pause': paragraphStart ? paragraphPause : sentencePause});
 }
 
 
@@ -189,12 +143,20 @@ if (typeof globalThis.WorkerGlobalScope !== 'undefined' && self instanceof globa
                 blocks += 1;
                 self.postMessage({'type': 'unitBlock', id, 'unit': unit.index, samples, sampleRate}, [samples.buffer]);
             };
-            // Pronounce the unit's words first (cached), to time the G2P apart from the voice network
+            // Pronounce the unit's words first (cached), to time the G2P apart from the voice network and renderer
             const words = textToPhrases(unit.text).reduce((count, phrase) => count + phrase.words.length, 0);
             trace(`unit ${unit.index}: G2P ${words} words in ${Math.round(performance.now() - unitStart)} ms`);
-            const onNetwork = (ms) => trace(`unit ${unit.index}: voice network in ${Math.round(ms)} ms`);
-            const unitOptions = {rate, 'seed': 1000 + unit.index, 'paragraphStart': unit.paragraphStart, speaker, onNetwork};
-            streamNeuralUnit(model, unit.text, unitOptions, post);
+            // Post each block as it's made - timing the synthesis (the voice network and renderer) apart from posting
+            const unitOptions = {rate, 'seed': 1000 + unit.index, 'paragraphStart': unit.paragraphStart, speaker};
+            let synthesisMs = 0;
+            let synthesisStart = performance.now();
+            for (const samples of unitBlocks(model, unit.text, unitOptions)) {
+                synthesisMs += performance.now() - synthesisStart;
+                post(samples, defaultSampleRate);
+                synthesisStart = performance.now();
+            }
+            synthesisMs += performance.now() - synthesisStart;
+            trace(`unit ${unit.index}: synthesis in ${Math.round(synthesisMs)} ms`);
             trace(`unit ${unit.index} done in ${Math.round(performance.now() - unitStart)} ms (${blocks} blocks)`);
             self.postMessage({'type': 'unitDone', id, 'unit': unit.index});
             finished = {run, 'unit': unit.index, voice, rate};

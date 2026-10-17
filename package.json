@@ -1,0 +1,19 @@
+{
+    "name": "picoshelf",
+    "private": true,
+    "type": "module",
+    "description": "PicoShelf - Every public-domain book, read aloud. Right in your browser.",
+    "homepage": "https://github.com/craigahobbs/picoshelf#readme",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/craigahobbs/picoshelf.git"
+    },
+    "author": {
+        "name": "Craig A. Hobbs",
+        "email": "craigahobbs@gmail.com",
+        "url": "https://github.com/craigahobbs"
+    },
+    "dependencies": {
+        "picovox": "^1.0.0"
+    }
+}
