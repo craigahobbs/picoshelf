@@ -1,6 +1,6 @@
 // The text front end - normalization, tokenizing into phrases, and pronunciation. The pronouncer turns a word into
 // ARPAbet phones with stress - the G2P network's (setPronouncer with lib/g2p.js's loadG2p): every word is pronounced by
-// the network, with no dictionary at runtime (the voice model's training data is pronounced by it too - nn/frontend.py,
+// the network, with no dictionary at runtime (the voice model's training data is pronounced by it too - picovox_train/frontend.py,
 // nn/js/tokenizeLines.js).
 
 import {isVowel} from './phonemes.js';
@@ -43,6 +43,14 @@ export const whWords = new Set(['who', 'what', 'where', 'when', 'why', 'how', 'w
 
 // Abbreviations
 const abbreviations = {'mr': 'mister', 'mrs': 'missus', 'dr': 'doctor', 'st': 'saint', 'vs': 'versus', 'etc': 'etcetera'};
+
+// Abbreviations only with their period - the months and days ("mon" is also French, so "Mon." only; "mar", "sat",
+// "sun", and "wed" are words, so they aren't abbreviations)
+const periodAbbreviations = {
+    'jan': 'january', 'feb': 'february', 'apr': 'april', 'jun': 'june', 'jul': 'july', 'aug': 'august', 'sep': 'september',
+    'sept': 'september', 'oct': 'october', 'nov': 'november', 'dec': 'december', 'mon': 'monday', 'tue': 'tuesday',
+    'tues': 'tuesday', 'thu': 'thursday', 'thur': 'thursday', 'thurs': 'thursday', 'fri': 'friday'
+};
 
 
 // Number words
@@ -108,6 +116,8 @@ export function textToPhrases(text) {
             const bare = token.replace(/\.$/, '');
             if (bare in abbreviations) {
                 addWord(abbreviations[bare]);
+            } else if (token.endsWith('.') && bare in periodAbbreviations) {
+                addWord(periodAbbreviations[bare]);
             } else {
                 addWord(bare);
                 if (token.endsWith('.')) {
