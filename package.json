@@ -14,6 +14,6 @@
         "url": "https://github.com/craigahobbs"
     },
     "dependencies": {
-        "picovox": "~1.0"
+        "picovox": "~1.1"
     }
 }

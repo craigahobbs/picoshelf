@@ -12,8 +12,9 @@ processing the files.
 
 ## Layout
 
-- `index.html`, `app.js`, `engine.js`, `worker.js`, `store.js`, `bookcache.js` - the app (copied from voice-synth's
-  `static/audiobook/`)
+- `index.html`, `app.js`, `engine.js`, `worker.js`, `renderworker.js`, `store.js`, `bookcache.js` - the app (copied
+  from voice-synth's `static/audiobook/`); the synthesis worker runs the voice network and its render worker the
+  synthesizer, at once on two cores
 - `sources/` - the book sources (Project Gutenberg, Standard Ebooks)
 - `lib/` - the catalog and book-format code (catalog search, Gutenberg text cleanup, EPUB and ZIP reading)
 - `data/catalog.json` - the book catalog (built by voice-synth's `tools/catalog.js`)
