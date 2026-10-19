@@ -61,7 +61,7 @@ export class Engine {
         this.output = null;
         this.mediaElement = null;
         // The synthesis workers - [{worker, ready, starts}] - several on multi-core devices, each speaking different
-        // upcoming units (phones synthesize slower than real time on one core)
+        // upcoming units (each with its own render worker - worker.js)
         this.workers = [];
         this.workerReady = false;
         // The startup timeline - [{ms (since the last play), event}] - for diagnosing slow starts (the app shows it with
@@ -84,9 +84,10 @@ export class Engine {
         this.measuredSeconds = 0;
         this.synthesizedSeconds = 0;
         this.synthesisSeconds = 0;
-        // (one on iPhones and iPads - Safari gives a page about one core's worth there, so more workers only compete)
+        // (each a pipeline of two workers - the voice network and its render worker, at once; one on iPhones and iPads,
+        // which run two at nearly twice one's speed - without a JIT, about 2.7 times real time - and more compete)
         this.models = importModels(voiceModelUrl);
-        const poolSize = isAppleMobile() ? 1 : Math.max(1, Math.min(3, (navigator.hardwareConcurrency || 2) - 1));
+        const poolSize = isAppleMobile() ? 1 : Math.max(1, Math.min(3, Math.floor(((navigator.hardwareConcurrency || 2) - 1) / 2)));
         for (let slot = 0; slot < poolSize; slot++) {
             this.startWorker(slot);
         }

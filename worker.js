@@ -1,6 +1,8 @@
 // The synthesis Web Worker - loads the G2P network (letters to phonemes, for every word - no dictionary), then speaks
 // the player's units (sentences) with the neural voices, posting small blocks of samples as they are synthesized so
-// playback starts almost immediately. The synthesis functions are exported so they also run under Node.
+// playback starts almost immediately. It runs the voice network and has its own render worker (renderworker.js) render
+// the frames as they come - the two at once, on two cores - relaying the render worker's blocks to the engine. The
+// synthesis functions are exported so they also run under Node.
 //
 // Messages in:
 // - {'type': 'units', 'id', 'units': [{'index', 'text', 'paragraphStart'}], 'voice', 'rate'} speaks the units in order,
@@ -19,7 +21,7 @@
 // and a unit is spoken by PicoVox's synthesis pipeline (picovox/lib/synthesis.js) - picovox/ is a copy of the npm
 // package picovox's lib/ (make picovox).
 
-import {defaultSampleRate, paragraphPause, sentenceBlocks, sentencePause, voiceSpeaker} from './picovox/lib/synthesis.js';
+import {paragraphPause, sentenceBlocks, sentenceFrames, sentencePause, voiceSpeaker} from './picovox/lib/synthesis.js';
 import {setPronouncer, textToPhrases} from './picovox/lib/lexicon.js';
 import {loadG2p} from './picovox/lib/g2p.js';
 import {loadPackagedModel} from './picovox/lib/package.js';
@@ -105,10 +107,37 @@ if (typeof globalThis.WorkerGlobalScope !== 'undefined' && self instanceof globa
         self.postMessage({'type': 'error', 'id': null, 'message': `${error.message} (${error.stack})`});
     });
 
+    // The render worker - its blocks, unit ends, and run ends relayed to the engine (its errors as the worker's)
+    const renderWorker = new Worker(new URL('renderworker.js', import.meta.url), {'type': 'module'});
+    renderWorker.onmessage = ({data}) => {
+        if (data.type === 'unitDone') {
+            trace(`unit ${data.unit}: render ${data.renderMs} ms`);
+        }
+        self.postMessage(data, data.type === 'unitBlock' ? [data.samples.buffer] : []);
+    };
+    renderWorker.onerror = (event) => {
+        event.preventDefault();
+        self.postMessage({'type': 'error', 'id': null, 'message': `render worker: ${event.message || '(no message)'}`});
+    };
+
+    // Yield to the event loop at once (a message to ourselves - setTimeout can wait milliseconds), so the render worker's
+    // blocks are relayed while the network works
+    const yieldChannel = new MessageChannel();
+    const yieldWaiters = [];
+    yieldChannel.port1.onmessage = () => yieldWaiters.shift()();
+    const yieldNow = () => new Promise((resolve) => {
+        yieldWaiters.push(resolve);
+        yieldChannel.port2.postMessage(null);
+    });
+
     // Unit runs - the latest run supersedes earlier ones between units. The unit a superseded run was finishing may also
-    // start the new run (the engine dealt it before the unit's start reached it) - it's skipped, already done.
+    // start the new run (the engine dealt it before the unit's start reached it) - it's skipped, already done. Each unit's
+    // frames go to the render worker a chunk at a time; it posts the unit's blocks, its end, and the run's end.
     let currentRun = 0;
     let finished = null;
+    // (one unit at a time - a run's unit yields between its chunks, so a newer run waits for it: the render worker takes
+    // one unit's frames at a time)
+    let unitLock = Promise.resolve();
     const runUnits = async ({id, units, voice, rate}) => {
         const run = ++currentRun;
         const factor = slowdown;
@@ -116,57 +145,62 @@ if (typeof globalThis.WorkerGlobalScope !== 'undefined' && self instanceof globa
         const model = await loadModel();
         const speaker = neuralSpeaker(model, voice);
         for (const [index, unit] of units.entries()) {
+            const previous = unitLock;
+            let release;
+            unitLock = new Promise((resolve) => {
+                release = resolve;
+            });
+            await previous;
             if (run !== currentRun) {
+                release();
                 return;
             }
             if (index === 0 && finished !== null && finished.run === run - 1 && finished.unit === unit.index &&
                 finished.voice === voice && finished.rate === rate) {
+                release();
                 continue;
             }
-            const unitStart = performance.now();
-            // Claim the unit at once, so the engine doesn't deal it to another run while it's pronounced
-            self.postMessage({'type': 'unitStart', id, 'unit': unit.index});
-            let blocks = 0;
-            let waited = 0;
-            const post = (samples, sampleRate) => {
-                // The slowdown - wait until the unit has taken slowdown times its synthesis time so far
-                const work = performance.now() - unitStart - waited;
-                while (performance.now() < unitStart + factor * work) {
-                    // Busy - as a slow device would be
+            try {
+                const unitStart = performance.now();
+                // Claim the unit at once, so the engine doesn't deal it to another run while it's pronounced
+                self.postMessage({'type': 'unitStart', id, 'unit': unit.index});
+                // Pronounce the unit's words first (cached), to time the G2P apart from the voice network
+                const words = textToPhrases(unit.text).reduce((count, phrase) => count + phrase.words.length, 0);
+                trace(`unit ${unit.index}: G2P ${words} words in ${Math.round(performance.now() - unitStart)} ms`);
+                const pause = unit.paragraphStart ? paragraphPause : sentencePause;
+                const {chunks, eq} = sentenceFrames(model, unit.text, {speaker, rate});
+                renderWorker.postMessage({'type': 'begin', id, 'unit': unit.index, eq, 'seed': 1000 + unit.index, pause, rate});
+                let networkMs = 0;
+                let networkStart = performance.now();
+                for (const chunk of chunks) {
+                    const count = chunk.length;
+                    const width = count === 0 ? 0 : chunk[0].length;
+                    const frames = new Float64Array(count * width);
+                    for (const [row, frame] of chunk.entries()) {
+                        frames.set(frame, row * width);
+                    }
+                    // The slowdown - wait until the unit's network has taken slowdown times its time so far
+                    const work = performance.now() - networkStart;
+                    while (performance.now() < networkStart + factor * work) {
+                        // Busy - as a slow device would be
+                    }
+                    networkMs += performance.now() - networkStart;
+                    renderWorker.postMessage({'type': 'frames', id, 'unit': unit.index, frames, count}, [frames.buffer]);
+                    await yieldNow();
+                    networkStart = performance.now();
                 }
-                waited = performance.now() - unitStart - work;
-                if (blocks === 0) {
-                    trace(`unit ${unit.index} first block after ${Math.round(performance.now() - unitStart)} ms`);
-                } else if (blocks === 1) {
-                    trace(`unit ${unit.index} first speech after ${Math.round(performance.now() - unitStart)} ms`);
-                }
-                blocks += 1;
-                self.postMessage({'type': 'unitBlock', id, 'unit': unit.index, samples, sampleRate}, [samples.buffer]);
-            };
-            // Pronounce the unit's words first (cached), to time the G2P apart from the voice network and renderer
-            const words = textToPhrases(unit.text).reduce((count, phrase) => count + phrase.words.length, 0);
-            trace(`unit ${unit.index}: G2P ${words} words in ${Math.round(performance.now() - unitStart)} ms`);
-            // Post each block as it's made - timing the synthesis (the voice network and renderer) apart from posting
-            const unitOptions = {rate, 'seed': 1000 + unit.index, 'paragraphStart': unit.paragraphStart, speaker};
-            let synthesisMs = 0;
-            let synthesisStart = performance.now();
-            for (const samples of unitBlocks(model, unit.text, unitOptions)) {
-                synthesisMs += performance.now() - synthesisStart;
-                post(samples, defaultSampleRate);
-                synthesisStart = performance.now();
+                networkMs += performance.now() - networkStart;
+                renderWorker.postMessage({'type': 'end', id, 'unit': unit.index});
+                trace(`unit ${unit.index}: network ${Math.round(networkMs)} ms`);
+                finished = {run, 'unit': unit.index, voice, rate};
+            } finally {
+                release();
             }
-            synthesisMs += performance.now() - synthesisStart;
-            trace(`unit ${unit.index}: synthesis in ${Math.round(synthesisMs)} ms`);
-            trace(`unit ${unit.index} done in ${Math.round(performance.now() - unitStart)} ms (${blocks} blocks)`);
-            self.postMessage({'type': 'unitDone', id, 'unit': unit.index});
-            finished = {run, 'unit': unit.index, voice, rate};
             // Yield, so a newer run or a cancel can arrive
-            await new Promise((resolve) => {
-                setTimeout(resolve, 0);
-            });
+            await yieldNow();
         }
         if (run === currentRun) {
-            self.postMessage({'type': 'runDone', id});
+            renderWorker.postMessage({'type': 'runEnd', id});
         }
     };
 
