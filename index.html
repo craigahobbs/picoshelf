@@ -530,9 +530,34 @@
     .skip:disabled {
         opacity: 0.35;
     }
+    .transport button {
+        flex: none;
+    }
+    /* A phone - the five transport buttons fit (and keep their circles) in 320px */
     @media (max-width: 420px) {
         .transport {
-            gap: 10px;
+            gap: 0;
+            justify-content: space-evenly;
+        }
+        .skip {
+            width: 56px;
+            height: 56px;
+        }
+        .skip .icon {
+            width: 36px;
+            height: 36px;
+        }
+        .section-skip {
+            width: 44px;
+            height: 44px;
+        }
+        .section-skip .icon {
+            width: 24px;
+            height: 24px;
+        }
+        .transport #playPause {
+            width: 72px;
+            height: 72px;
         }
     }
     #playPause {
