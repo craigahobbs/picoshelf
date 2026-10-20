@@ -26,11 +26,14 @@ const catalogPromise = fetch(new URL('./data/catalog.json', import.meta.url)).th
 // The skip distance (s), the narrator speeds, and the narrator voices
 const skipSeconds = 30;
 const speeds = [0.8, 1, 1.2, 1.4, 1.6];
-// (the app's keys for PicoVox's male and female voices are neural-male and neural-female - listeners' saved settings;
-// the designed voices are PicoVox's keys)
-const voiceChoices = voiceTable.map(({key, label, sex, description}) => ({
-    'value': key === 'male' || key === 'female' ? `neural-${key}` : key, label, sex, description
-}));
+// (the app's keys for PicoVox's male and female voices are neural-male and neural-female - listeners' saved settings -
+// and the app names them John and Mary; the designed voices are PicoVox's keys)
+const plainVoices = {'male': 'John', 'female': 'Mary'};
+const voiceChoices = voiceTable.map(({key, label, sex, description}) => (key in plainVoices ?
+    {'value': `neural-${key}`, 'label': plainVoices[key], sex, description} : {'value': key, label, sex, description}));
+// A book's narrator by default - the catalog's voice for it (cast by tools/voicecast.js), at normal speed
+const fallbackVoice = 'neural-male';
+const defaultRate = 1;
 
 
 // Elements
@@ -69,12 +72,18 @@ const sheetBody = element('sheetBody');
 // State - the persisted state, the open book ({key, chapters, loading, progress, error}), the browse results, and the
 // sheet being shown
 const state = loadState();
-// The narrator is a neural voice - listeners who chose a classic (rule) voice get its neural counterpart
-const classicVoices = {'male': 'neural-male', 'female': 'neural-female'};
-if (!voiceChoices.some(({value}) => value === state.settings.voice)) {
-    state.settings.voice = classicVoices[state.settings.voice] || voiceChoices[0].value;
+// The narrator was one setting for every book - each book listened to keeps it (as the listener's choice for the
+// book), so no book's narrator changes mid-book. Listeners who chose a classic (rule) voice get its neural counterpart.
+if (state.settings !== undefined) {
+    const classicVoices = {'male': 'neural-male', 'female': 'neural-female'};
+    const {voice, rate} = state.settings;
+    const savedVoice = voiceChoices.some(({value}) => value === voice) ? voice : (classicVoices[voice] ?? fallbackVoice);
+    for (const book of Object.values(state.books).filter((item) => item.char > 0)) {
+        book.voice ??= savedVoice;
+        book.rate ??= speeds.includes(rate) ? rate : defaultRate;
+    }
+    delete state.settings;
 }
-delete state.settings.neuralDefault;
 state.sourceTab ||= 'all';
 let current = null;
 const browseState = {'query': '', 'page': 1, 'books': [], 'hasMore': false, 'total': 0, 'error': null};
@@ -275,6 +284,9 @@ async function openBook(book, {play = false, show = true} = {}) {
     renderAll();
     const opening = current;
     try {
+        // The book's default voice - the catalog's (a cached book plays without the catalog)
+        const catalogEntry = findBook(await catalogPromise.catch(() => ({'books': []})), book.source, book.id);
+        opening.defaultVoice = voiceChoices.some(({value}) => value === catalogEntry?.voice) ? catalogEntry.voice : fallbackVoice;
         let prepared = await getCachedBook(key);
         if (prepared === null) {
             const loader = loaders[book.source];
@@ -298,7 +310,7 @@ async function openBook(book, {play = false, show = true} = {}) {
         const entry = state.books[key];
         entry.title ||= prepared.title || '';
         entry.author ||= prepared.author || '';
-        engine.load(prepared.text, state.settings, entry.char || 0);
+        engine.load(prepared.text, narrator(), entry.char || 0);
         persist();
         renderAll();
         if (opening.playWhenLoaded) {
@@ -885,9 +897,22 @@ function addBookmark() {
 }
 
 
-// The settings sheet - the narrator's voice and speed
+// The open book's narrator - the listener's voice and speed for it (if still offered), or its defaults
+function narrator() {
+    const book = state.books[current.key];
+    const voice = voiceChoices.some(({value}) => value === book.voice) ? book.voice : (current.defaultVoice ?? fallbackVoice);
+    return {voice, 'rate': speeds.includes(book.rate) ? book.rate : defaultRate};
+}
+
+
+// The settings sheet - the open book's narrator (its voice and speed), the book's defaults unless the listener chose
+// others
 function renderSettings() {
     sheetTitle.textContent = 'Narrator';
+    if (current === null) {
+        sheetBody.replaceChildren();
+        return;
+    }
     const choice = (title, options, selected, onSelect) => {
         const section = make('section', 'setting');
         section.append(make('h3', '', title));
@@ -906,12 +931,25 @@ function renderSettings() {
         section.append(tabs);
         return section;
     };
+    const book = state.books[current.key];
+    const defaults = {'voice': current.defaultVoice ?? fallbackVoice, 'rate': defaultRate};
+    const defaultLabel = voiceChoices.find(({value}) => value === defaults.voice).label;
+
+    // A choice for the book - the book's default is no choice
     const apply = (settings) => {
-        state.settings = {...state.settings, ...settings};
+        for (const [name, value] of Object.entries(settings)) {
+            if (value === defaults[name]) {
+                delete book[name];
+            } else {
+                book[name] = value;
+            }
+        }
         persist();
-        engine.setVoice(state.settings);
+        engine.setVoice(narrator());
         renderSettings();
     };
+    const {voice, rate} = narrator();
+
     // The voice - a list by sex, with the voice's description
     const voiceSetting = () => {
         const section = make('section', 'setting');
@@ -921,25 +959,42 @@ function renderSettings() {
         for (const [sex, label] of [['female', 'Female voices'], ['male', 'Male voices']]) {
             const group = document.createElement('optgroup');
             group.label = label;
-            for (const voice of voiceChoices.filter((item) => item.sex === sex)) {
-                const option = make('option', '', voice.label);
-                option.value = voice.value;
-                option.selected = voice.value === state.settings.voice;
+            for (const item of voiceChoices.filter((choiceItem) => choiceItem.sex === sex)) {
+                const option = make('option', '', item.value === defaults.voice ? `${item.label} (default)` : item.label);
+                option.value = item.value;
+                option.selected = item.value === voice;
                 group.append(option);
             }
             select.append(group);
         }
         select.addEventListener('change', () => apply({'voice': select.value}));
         section.append(select);
-        const selected = voiceChoices.find((voice) => voice.value === state.settings.voice);
+        const selected = voiceChoices.find((item) => item.value === voice);
         section.append(make('p', 'muted', selected.description));
+        return section;
+    };
+
+    // Reset - the book's default narrator
+    const resetSetting = () => {
+        const section = make('section', 'setting reset-setting');
+        const changed = book.voice !== undefined || book.rate !== undefined;
+        section.append(make('p', 'muted', changed ?
+            `This book's default narrator is ${defaultLabel} at ${defaults.rate}×.` :
+            `${defaultLabel} at ${defaults.rate}× - the narrator chosen for this book.`));
+        if (changed) {
+            const button = make('button', 'button', 'Reset to default');
+            button.type = 'button';
+            button.addEventListener('click', () => apply(defaults));
+            section.append(button);
+        }
         return section;
     };
     const note = make('p', 'muted', 'The voices are synthesized in your browser - no recordings. A small neural network, ' +
         'trained on 53 hours of 237 American audiobook readers, drives a model of the human voice.');
     sheetBody.replaceChildren(
         voiceSetting(),
-        choice('Speed', speeds.map((speed) => [speed, `${speed}×`]), state.settings.rate, (rate) => apply({rate})),
+        choice('Speed', speeds.map((speed) => [speed, `${speed}×`]), rate, (value) => apply({'rate': value})),
+        resetSetting(),
         note
     );
 }

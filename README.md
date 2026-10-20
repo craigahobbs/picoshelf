@@ -17,12 +17,26 @@ processing the files.
   synthesizer, at once on two cores
 - `sources/` - the book sources (Project Gutenberg, Standard Ebooks)
 - `lib/` - the catalog and book-format code (catalog search, Gutenberg text cleanup, EPUB and ZIP reading)
-- `data/catalog.json` - the book catalog (built by voice-synth's `tools/catalog.js`)
+- `data/catalog.json` - the book catalog, each book with its narrator's voice (`make catalog`)
+- `tools/` - the catalog builder (`catalog.js` - every Standard Ebooks book and the most-downloaded Project Gutenberg
+  books, its pages cached under `build/catalog/`) and the narrator casting (`voicecast.js` - a local Ollama decision
+  model chooses each book's voice; `voicelabels.json`, 132 hand-cast books, scores the decision models)
 - `picovox/` - the PicoVox voice - a copy of the npm package `picovox`'s `lib/` (the text front end and G2P, the neural
   model and synthesizer runtime, the synthesis pipeline and sentence splitting the app uses, and the generated model
   modules, `lib/models/`), with its `package.json` (the version) and `LICENSE`
 - `package.json`, `package-lock.json` - the PicoVox dependency, pinned by the lock file
-- `Makefile` - `make picovox` copies the installed package into `picovox/`
+- `Makefile` - `make picovox` copies the installed package into `picovox/`; `make catalog` builds the catalog
+
+## The catalog and its narrators
+
+`make catalog` rebuilds `data/catalog.json` (`node tools/catalog.js`; `--cache-only` builds from the cached pages
+alone). Each book's default narrator is cast by a local [Ollama](https://ollama.com) decision model,
+`kev:9b-nvfp4` (`ollama pull kev:9b-nvfp4`, with Ollama running): it answers a choice of the ten designed voices, each
+with casting notes, about the book's title, author, subjects, and description - Jane Austen gets Helen, a composed,
+refined voice, and Moby Dick gets Robert, a deep, weathered one. The casts are cached by model and book, so a rebuild
+casts only new or changed books. `node tools/voicecast.js --eval --model <model>` scores a decision model on the
+hand-cast books; `--book <title>` shows a book's cast. A listener's voice and speed for a book override its defaults
+(the cast voice, at 1×), and the Narrator sheet resets them.
 
 ## Updating PicoVox
 

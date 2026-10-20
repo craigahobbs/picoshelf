@@ -1,13 +1,11 @@
-// The listener's state in browser storage - the current book and view, the narrator settings, each started book's
-// details and position, and each book's bookmarks. Storage may be unavailable (private browsing), so every access is
-// guarded and the app works without it.
+// The listener's state in browser storage - the current book and view, each started book's details, position, and
+// narrator (the listener's voice and speed for the book, if not its defaults), and each book's bookmarks. Storage may
+// be unavailable (private browsing), so every access is guarded and the app works without it.
 
 
 // The storage key and the default state
 const storageKey = 'gutenberg-audiobooks-v1';
-const defaultState = {
-    'current': null, 'view': 'library', 'settings': {'voice': 'neural-male', 'rate': 1}, 'books': {}, 'bookmarks': {}
-};
+const defaultState = {'current': null, 'view': 'library', 'books': {}, 'bookmarks': {}};
 
 
 // Load the state
@@ -15,10 +13,7 @@ export function loadState() {
     try {
         const saved = JSON.parse(localStorage.getItem(storageKey));
         if (saved !== null && typeof saved === 'object') {
-            return {
-                ...defaultState, ...saved, 'settings': {...defaultState.settings, ...saved.settings},
-                'books': saved.books || {}, 'bookmarks': saved.bookmarks || {}
-            };
+            return {...defaultState, ...saved, 'books': saved.books || {}, 'bookmarks': saved.bookmarks || {}};
         }
     } catch {
         // Unavailable or corrupt storage - start fresh

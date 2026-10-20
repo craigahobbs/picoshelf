@@ -15,10 +15,16 @@ clean:
 	rm -rf node_modules
 
 
+# The book catalog, data/catalog.json - each book's narrator cast by a local Ollama decision model (tools/voicecast.js)
+.PHONY: catalog
+catalog:
+	node tools/catalog.js
+
+
 # The commit check - the scripts parse, and picovox/ is the package's lib/ at the version package-lock.json pins
 .PHONY: commit
 commit:
-	@for file in *.js sources/*.js lib/*.js; do node --check $$file || exit 1; done
+	@for file in *.js sources/*.js lib/*.js tools/*.js; do node --check $$file || exit 1; done
 	@test "$$(node -p "require('./picovox/package.json').version")" = "$$(node -p "require('./package-lock.json').packages['node_modules/picovox'].version")" \
 		|| { echo "picovox/ isn't the pinned picovox - run make picovox"; exit 1; }
 	@echo "PicoShelf: scripts parse; picovox/ is picovox $$(node -p "require('./picovox/package.json').version")"
@@ -29,8 +35,10 @@ commit:
 gh-pages: commit
 	if [ ! -d ../picoshelf.gh-pages ]; then git clone -b gh-pages `git config --get remote.origin.url` ../picoshelf.gh-pages; fi
 	cd ../picoshelf.gh-pages && git pull
-	rsync -rv --delete --exclude=.git/ --exclude=node_modules/ ./ ../picoshelf.gh-pages
+	rsync -rv --delete --exclude=.git/ --exclude=node_modules/ --exclude=build/ ./ ../picoshelf.gh-pages
 
 
+# superclean - also the catalog's cached pages and casts (build/)
 .PHONY: superclean
 superclean: clean
+	rm -rf build
