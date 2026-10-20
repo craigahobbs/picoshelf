@@ -9,15 +9,17 @@
 //   --max-age <days>          refetch cached listing and book pages older than this (default 30)
 //   --cache-only              no network requests - build from the cache alone (uncached pages and unresolved
 //                             Gutenberg texts are left out)
-//   --voice-model <model>     the Ollama decision model that casts each book's narrator (default tools/voicecast.js's)
+//   --voice-model <model>     the Ollama decision model that casts each book's narrator and chooses its genres (default
+//                             tools/decide.js's)
 //   -o <file>                 the output file (default data/catalog.json)
 //
-// Each book's narrator - its voice - is cast by a local Ollama decision model (tools/voicecast.js; Ollama must be
-// running, with the model pulled). Every remote page is cached under build/catalog/, so a rerun is fast and an
-// interrupted build resumes. Requests are throttled per site (Standard Ebooks about 2 a second) and retried with
-// backoff. GITenberg repositories are found in the gitberg project's published repository list; the GitHub search API
-// (10 searches a minute without a GITHUB_TOKEN) is used only for books missing from the list.
+// Each book's narrator - its voice - and its genres are chosen by a local Ollama decision model (tools/voicecast.js,
+// tools/genres.js; Ollama must be running, with the model pulled). Every remote page is cached under build/catalog/, so
+// a rerun is fast and an interrupted build resumes. Requests are throttled per site (Standard Ebooks about 2 a second)
+// and retried with backoff. GITenberg repositories are found in the gitberg project's published repository list; the
+// GitHub search API (10 searches a minute without a GITHUB_TOKEN) is used only for books missing from the list.
 
+import {bookGenres, genreNames} from './genres.js';
 import {castBooks, castModel} from './voicecast.js';
 import {dirname, join} from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync} from 'node:fs';
@@ -727,14 +729,19 @@ async function main() {
     const seBooks = await standardEbooks(options);
     const gutenberg = options.gutenberg > 0 ? await gutenbergBooks(options, seBooks) : [];
 
-    // Each book's narrator
+    // Each book's narrator and genres
     const books = [...seBooks, ...gutenberg];
     const voices = await castBooks(books, {'model': options.voiceModel, log});
+    const genres = await bookGenres(books, {'model': options.voiceModel, log});
     const catalog = {
         'version': 1,
         'generated': new Date().toISOString(),
         sources,
-        'books': books.map((book) => ({...book, 'voice': voices[`${book.source}|${book.id}`]}))
+        'genres': genreNames(),
+        'books': books.map((book) => {
+            const key = `${book.source}|${book.id}`;
+            return {...book, 'voice': voices[key], 'genres': genres[key]};
+        })
     };
     const json = catalogJSON(catalog);
     JSON.parse(json);

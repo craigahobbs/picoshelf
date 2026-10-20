@@ -178,6 +178,19 @@ export class Engine {
         this.notify();
     }
 
+    // Unload the book - playback and synthesis stopped, nothing loaded
+    unload() {
+        this.stopSources();
+        this.cancelRun();
+        if (this.mediaElement !== null) {
+            this.mediaElement.pause();
+        }
+        this.playing = false;
+        this.ended = false;
+        this.session = null;
+        this.notify();
+    }
+
     // Change the voice or rate - continuing from the current sentence
     setVoice({voice, rate}) {
         if (this.session === null || (voice === this.session.voice && rate === this.session.rate)) {

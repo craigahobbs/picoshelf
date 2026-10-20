@@ -205,24 +205,60 @@
         color: var(--text);
     }
 
-    /* The continue-listening card */
-    .continue {
+    /* The library's groups - an author or a genre, its books shown when opened */
+    .group {
+        border-bottom: 1px solid var(--border);
+    }
+    .group > summary {
         display: flex;
         align-items: center;
-        gap: 16px;
-        padding: 14px;
-        border-radius: 14px;
-        background: var(--surface);
-        box-shadow: var(--shadow);
+        gap: 10px;
+        min-height: 48px;
+        padding: 0 8px;
+        list-style: none;
+        cursor: pointer;
+        font-weight: 600;
     }
-    .continue .cover {
-        width: 72px;
+    .group > summary::-webkit-details-marker {
+        display: none;
     }
-    .continue .book-open {
-        padding: 0;
+    .group > summary .icon {
+        width: 18px;
+        height: 18px;
+        color: var(--muted);
+        transform: rotate(180deg);
+        transition: transform 0.15s;
     }
-    .continue .book-open:hover {
-        background: none;
+    .group[open] > summary .icon {
+        transform: rotate(270deg);
+    }
+    .group-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .group-count {
+        font-weight: 400;
+        font-size: 0.875rem;
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+    }
+    .group > .book-list {
+        padding: 0 0 8px 4px;
+    }
+    .group-more {
+        display: block;
+        width: 100%;
+        margin: 0 0 10px;
+    }
+    .view-tabs {
+        margin-top: 12px;
+    }
+    .view-tabs button {
+        min-height: 34px;
+        font-size: 0.875rem;
     }
     .round-play {
         flex: none;
@@ -693,8 +729,8 @@
     <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.14v13.72a1 1 0 0 0 1.52.85l10.9-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z"/></symbol>
     <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4" height="15" rx="1.2"/><rect x="14" y="4.5" width="4" height="15" rx="1.2"/></symbol>
     <symbol id="i-busy" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9h-2.5A6.5 6.5 0 1 1 12 5.5z"/></symbol>
-    <symbol id="i-back30" viewBox="0 0 48 48"><path d="M24 8a16 16 0 1 1-15.7 19h3.1A13 13 0 1 0 24 11v5l-8-6.5L24 3z"/><text x="24" y="30.5" text-anchor="middle" font-size="12" font-weight="700" font-family="system-ui, sans-serif">30</text></symbol>
-    <symbol id="i-forward30" viewBox="0 0 48 48"><path d="M24 8a16 16 0 1 0 15.7 19h-3.1A13 13 0 1 1 24 11v5l8-6.5L24 3z"/><text x="24" y="30.5" text-anchor="middle" font-size="12" font-weight="700" font-family="system-ui, sans-serif">30</text></symbol>
+    <symbol id="i-back30" viewBox="0 0 48 48"><path d="M24 8a16 16 0 1 1-15.7 19h3.1A13 13 0 1 0 24 11v5l-8-6.5L24 3z"/><text x="24" y="28.3" text-anchor="middle" font-size="12" font-weight="700" font-family="system-ui, sans-serif">30</text></symbol>
+    <symbol id="i-forward30" viewBox="0 0 48 48"><path d="M24 8a16 16 0 1 0 15.7 19h-3.1A13 13 0 1 1 24 11v5l8-6.5L24 3z"/><text x="24" y="28.3" text-anchor="middle" font-size="12" font-weight="700" font-family="system-ui, sans-serif">30</text></symbol>
     <symbol id="i-section-back" viewBox="0 0 24 24"><path d="M6 5h2v14H6zm3.5 7 8.5 6V6z"/></symbol>
     <symbol id="i-section-forward" viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM6 18l8.5-6L6 6z"/></symbol>
     <symbol id="i-share" viewBox="0 0 24 24"><path d="m12 2.6 4.7 4.7-1.4 1.4L13 6.4V15h-2V6.4L8.7 8.7 7.3 7.3zM5 10h4v2H6v8h12v-8h-3v-2h4a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V11a1 1 0 0 1 1-1z"/></symbol>
@@ -713,25 +749,15 @@
         <p class="muted">Every public-domain book, read aloud. Right in your browser.</p>
     </header>
 
-    <section id="continueSection" class="library-section" hidden>
-        <h2>Continue listening</h2>
-        <div class="continue" id="continueCard"></div>
-    </section>
-
-    <section id="shelfSection" class="library-section" hidden>
-        <h2>Your books</h2>
-        <ul id="shelf" class="book-list"></ul>
-    </section>
-
     <section class="library-section">
-        <h2>Find a book</h2>
-        <div id="sourceTabs" class="tabs" role="tablist" aria-label="Book source"></div>
+        <div id="scopeTabs" class="tabs" role="tablist" aria-label="Books"></div>
         <form id="searchForm" class="search" role="search">
             <input id="search" type="search" placeholder="Search titles and authors" aria-label="Search titles and authors" enterkeyhint="search" autocomplete="off">
             <button class="button" type="submit">Search</button>
         </form>
+        <div id="viewTabs" class="tabs view-tabs" role="tablist" aria-label="View"></div>
         <p id="sourceNote" class="source-note muted"></p>
-        <ul id="results" class="book-list"></ul>
+        <div id="results"></div>
         <p id="resultsStatus" class="list-status" role="status"></p>
         <button id="more" class="button" type="button" hidden>More</button>
     </section>
