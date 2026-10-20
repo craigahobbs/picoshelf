@@ -25,7 +25,7 @@ const catalogPromise = fetch(new URL('./data/catalog.json', import.meta.url)).th
 
 // The skip distance (s), the narrator speeds, and the narrator voices
 const skipSeconds = 30;
-const speeds = [0.8, 1, 1.2, 1.4, 1.6];
+const speeds = [0.8, 1, 1.1, 1.2, 1.5];
 // (the app's keys for PicoVox's male and female voices are neural-male and neural-female - listeners' saved settings -
 // and the app names them John and Mary; the designed voices are PicoVox's keys)
 const plainVoices = {'male': 'John', 'female': 'Mary'};
@@ -63,6 +63,8 @@ const progressFill = element('progressFill');
 const percentLabel = element('percent');
 const remainingLabel = element('remaining');
 const playPauseButton = element('playPause');
+const sectionBackButton = element('sectionBack');
+const sectionForwardButton = element('sectionForward');
 const playerStatus = element('playerStatus');
 const sheet = element('sheet');
 const sheetTitle = element('sheetTitle');
@@ -80,7 +82,7 @@ if (state.settings !== undefined) {
     const savedVoice = voiceChoices.some(({value}) => value === voice) ? voice : (classicVoices[voice] ?? fallbackVoice);
     for (const book of Object.values(state.books).filter((item) => item.char > 0)) {
         book.voice ??= savedVoice;
-        book.rate ??= speeds.includes(rate) ? rate : defaultRate;
+        book.rate ??= typeof rate === 'number' ? nearestSpeed(rate) : defaultRate;
     }
     delete state.settings;
 }
@@ -150,6 +152,106 @@ function icon(name, className = 'icon') {
 // A book's key - its source and id
 function bookKey(book) {
     return `${book.source}:${book.id}`;
+}
+
+
+// A book's link id - stable across catalog builds: its Project Gutenberg ebook number (pg1342), or its Standard Ebooks
+// path (se.jane-austen.pride-and-prejudice - the path's segments are lowercase letters, digits, hyphens, and
+// underscores, so the id needs no URL encoding)
+function linkId(book) {
+    if (book.source === 'gutenberg') {
+        return `pg${book.id}`;
+    }
+    return `se.${book.id.replace(/^\/ebooks\//, '').replaceAll('/', '.')}`;
+}
+
+
+// A link id's book - {source, id}, or null
+function linkBook(id) {
+    const gutenbergMatch = /^pg(\d+)$/.exec(id);
+    if (gutenbergMatch !== null) {
+        return {'source': 'gutenberg', 'id': gutenbergMatch[1]};
+    }
+    const seMatch = /^se\.([a-z0-9_-]+(?:\.[a-z0-9_-]+)+)$/.exec(id);
+    return seMatch === null ? null : {'source': 'standardebooks', 'id': `/ebooks/${seMatch[1].replaceAll('.', '/')}`};
+}
+
+
+// The hash parameters - key=value pairs joined by "&", their keys and values URL-encoded (as MarkdownUp's); a part
+// without "=" is ignored
+function decodeHash(hash) {
+    const params = {};
+    for (const part of hash.replace(/^#/, '').split('&')) {
+        const equal = part.indexOf('=');
+        if (equal > 0) {
+            try {
+                params[decodeURIComponent(part.slice(0, equal))] = decodeURIComponent(part.slice(equal + 1));
+            } catch {
+                // A malformed escape - the part is ignored
+            }
+        }
+    }
+    return params;
+}
+
+
+// Encode hash parameters (null values left out)
+function encodeHash(params) {
+    return Object.entries(params).filter(([, value]) => value !== null).
+        map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`).join('&');
+}
+
+
+// The open book's link - #book=ID, and with a section (the contents' sections and subsections in order, from 1),
+// &section=N
+function bookLink(section = null) {
+    const book = state.books[current.key];
+    return `${window.location.origin}${window.location.pathname}${window.location.search}#${encodeHash({'book': linkId(book), section})}`;
+}
+
+
+// The section number of a character offset in the open book (null before the first section)
+function sectionNumber(char) {
+    const chapter = chapterAt(char);
+    return chapter === null ? null : current.chapters.indexOf(chapter) + 1;
+}
+
+
+// Keep the address the open book's link at the listener's section (the library's address has no hash), without new
+// history entries
+function updateAddress() {
+    const showing = current !== null && !playerView.hidden;
+    let hash = '';
+    if (showing) {
+        const ready = !current.loading && current.error === null && engine.loaded;
+        const section = ready ? sectionNumber(engine.state().sentenceChar) : current.section ?? null;
+        hash = `#${encodeHash({'book': linkId(state.books[current.key]), section})}`;
+    }
+    if (window.location.hash !== hash) {
+        history.replaceState(history.state, '', `${window.location.pathname}${window.location.search}${hash}`);
+    }
+}
+
+
+// Open a link's book (#book=ID&section=N) - in the player, at the section (the listener's place, if it's in the
+// section); returns false if the link names no book
+async function openLink(hash) {
+    const params = decodeHash(hash);
+    const linked = linkBook(params.book ?? '');
+    if (linked === null) {
+        return false;
+    }
+    const section = /^[1-9]\d*$/.test(params.section ?? '') ? Number(params.section) : null;
+    const saved = state.books[bookKey(linked)];
+    let book = saved;
+    if (book === undefined) {
+        book = findBook(await catalogPromise.catch(() => ({'books': []})), linked.source, linked.id);
+    }
+    if (book === null) {
+        return false;
+    }
+    openBook(book, {'play': false, 'show': true, section});
+    return true;
 }
 
 
@@ -254,7 +356,7 @@ function onEngineChange(engineState) {
 
 // Open a book - download it (or use the cached copy) and load it at the listener's place. To play, call from a user
 // gesture (it unlocks audio).
-async function openBook(book, {play = false, show = true} = {}) {
+async function openBook(book, {play = false, show = true, section = null} = {}) {
     const key = bookKey(book);
     const saved = state.books[key] || {};
     state.books[key] = {
@@ -270,8 +372,18 @@ async function openBook(book, {play = false, show = true} = {}) {
         engine.ensureAudio();
     }
 
-    // Already open?
+    // Already open? (at a linked section, if not in it)
     if (current !== null && current.key === key && current.error === null) {
+        if (section !== null) {
+            if (current.loading) {
+                current.section = section;
+            } else if (engine.loaded) {
+                const start = sectionStart(current.chapters, section, engine.state().sentenceChar);
+                if (start !== engine.state().sentenceChar) {
+                    engine.seekChar(start);
+                }
+            }
+        }
         if (play && !current.loading) {
             engine.play();
         }
@@ -280,7 +392,7 @@ async function openBook(book, {play = false, show = true} = {}) {
         return;
     }
     engine.pause();
-    current = {key, 'chapters': [], 'loading': true, 'progress': null, 'error': null, 'playWhenLoaded': play};
+    current = {key, 'chapters': [], 'loading': true, 'progress': null, 'error': null, 'playWhenLoaded': play, section};
     renderAll();
     const opening = current;
     try {
@@ -310,7 +422,7 @@ async function openBook(book, {play = false, show = true} = {}) {
         const entry = state.books[key];
         entry.title ||= prepared.title || '';
         entry.author ||= prepared.author || '';
-        engine.load(prepared.text, narrator(), entry.char || 0);
+        engine.load(prepared.text, narrator(), sectionStart(opening.chapters, opening.section, entry.char || 0));
         persist();
         renderAll();
         if (opening.playWhenLoaded) {
@@ -357,6 +469,49 @@ function skip(seconds) {
 }
 
 
+// A linked section's starting place - the listener's place if it's in the section (or there's no such section), else
+// the section's start
+function sectionStart(chapters, section, char) {
+    const chapter = section === null ? undefined : chapters[section - 1];
+    if (chapter === undefined) {
+        return char;
+    }
+    const next = chapters[section];
+    return char >= chapter.char && (next === undefined || char < next.char) ? char : chapter.char;
+}
+
+
+// Go to the next or the previous section - back goes to the section's start, or to the previous section's from near
+// its start
+const sectionRestartChars = 120;
+function skipSection(direction) {
+    if (current === null || current.loading || current.error !== null || !engine.loaded) {
+        return;
+    }
+    const target = sectionTarget(direction);
+    if (target !== null) {
+        engine.seekChar(target.char);
+        savePosition(true);
+        renderPlayer();
+    }
+}
+
+
+// The section skipSection goes to - null if none
+function sectionTarget(direction) {
+    const {sentenceChar} = engine.state();
+    const chapter = chapterAt(sentenceChar);
+    const index = chapter === null ? -1 : current.chapters.indexOf(chapter);
+    if (direction > 0) {
+        return current.chapters[index + 1] ?? null;
+    }
+    if (chapter !== null && sentenceChar > chapter.char + sectionRestartChars) {
+        return chapter;
+    }
+    return current.chapters[index - 1] ?? null;
+}
+
+
 // Show the library
 function showLibrary() {
     closeSheet();
@@ -364,6 +519,7 @@ function showLibrary() {
     persist();
     playerView.hidden = true;
     libraryView.hidden = false;
+    updateAddress();
     renderLibrary();
     renderMiniPlayer();
 }
@@ -381,6 +537,7 @@ function showPlayer() {
     playerView.hidden = false;
     window.scrollTo(0, 0);
     renderPlayer();
+    updateAddress();
 }
 
 
@@ -447,6 +604,8 @@ function renderPlayer() {
         status = 'The end. Press play to listen again.';
     }
     setPlayIcon(playPauseButton, buttonIcon, label);
+    sectionBackButton.disabled = !ready || sectionTarget(-1) === null;
+    sectionForwardButton.disabled = !ready || sectionTarget(1) === null;
     playerStatus.textContent = status;
     playerStatus.classList.toggle('error', isError);
 }
@@ -729,7 +888,49 @@ function renderSheet() {
         renderBookmarks();
     } else if (openSheetName === 'settings') {
         renderSettings();
+    } else if (openSheetName === 'share') {
+        renderShare();
     }
+}
+
+
+// The share sheet - links to the book and to the listener's section (the system's share sheet, else copied)
+function renderShare() {
+    sheetTitle.textContent = 'Share';
+    const book = state.books[current.key];
+    const section = engine.loaded ? sectionNumber(engine.state().sentenceChar) : null;
+    const choices = [{'label': book.title, 'detail': 'This book', 'url': bookLink()}];
+    if (section !== null) {
+        choices.push({'label': current.chapters[section - 1].title, 'detail': 'This section', 'url': bookLink(section)});
+    }
+    const list = make('ul', 'sheet-list');
+    const note = make('p', 'muted share-note', '');
+    for (const choice of choices) {
+        const item = make('li', 'sheet-item');
+        const go = make('button', 'sheet-go');
+        go.type = 'button';
+        go.append(make('span', 'label', choice.label), make('span', 'detail', choice.detail));
+        go.addEventListener('click', async () => {
+            if (navigator.share) {
+                try {
+                    await navigator.share({'title': book.title, 'url': choice.url});
+                    closeSheet();
+                } catch {
+                    // Canceled
+                }
+                return;
+            }
+            try {
+                await navigator.clipboard.writeText(choice.url);
+                note.textContent = 'Link copied.';
+            } catch {
+                note.textContent = choice.url;
+            }
+        });
+        item.append(go);
+        list.append(item);
+    }
+    sheetBody.replaceChildren(list, note);
 }
 
 
@@ -897,11 +1098,17 @@ function addBookmark() {
 }
 
 
+// The offered speed nearest a speed (a speed the app no longer offers - 1.4x, say - becomes its nearest)
+function nearestSpeed(rate) {
+    return speeds.reduce((best, speed) => (Math.abs(speed - rate) < Math.abs(best - rate) ? speed : best));
+}
+
+
 // The open book's narrator - the listener's voice and speed for it (if still offered), or its defaults
 function narrator() {
     const book = state.books[current.key];
     const voice = voiceChoices.some(({value}) => value === book.voice) ? book.voice : (current.defaultVoice ?? fallbackVoice);
-    return {voice, 'rate': speeds.includes(book.rate) ? book.rate : defaultRate};
+    return {voice, 'rate': typeof book.rate === 'number' ? nearestSpeed(book.rate) : defaultRate};
 }
 
 
@@ -1051,6 +1258,12 @@ window.addEventListener('popstate', () => {
 playPauseButton.addEventListener('click', togglePlay);
 element('skipBack').addEventListener('click', () => skip(-skipSeconds));
 element('skipForward').addEventListener('click', () => skip(skipSeconds));
+sectionBackButton.addEventListener('click', () => skipSection(-1));
+sectionForwardButton.addEventListener('click', () => skipSection(1));
+element('shareButton').addEventListener('click', () => openSheet('share'));
+window.addEventListener('hashchange', () => {
+    openLink(window.location.hash);
+});
 element('contentsButton').addEventListener('click', () => openSheet('contents'));
 element('bookmarksButton').addEventListener('click', () => openSheet('bookmarks'));
 element('settingsButton').addEventListener('click', () => openSheet('settings'));
@@ -1100,6 +1313,7 @@ window.addEventListener('pagehide', () => savePosition(true));
 // Refresh the player and mini player, and remember the place, as playback moves
 setInterval(() => {
     renderPlayer();
+    updateAddress();
     if (!miniPlayer.hidden) {
         renderMiniPlayer();
         renderContinuePlay();
@@ -1121,7 +1335,16 @@ catalogPromise.then((loaded) => {
     renderResults();
 });
 const resumeBook = state.current === null ? undefined : state.books[state.current];
-if (resumeBook !== undefined && state.view === 'player') {
+const startHash = window.location.hash;
+if (linkBook(decodeHash(startHash).book ?? '') !== null) {
+    // A link - its book, at its section
+    history.replaceState({'view': 'library'}, '', `${window.location.pathname}${window.location.search}`);
+    openLink(startHash).then((opened) => {
+        if (!opened) {
+            showLibrary();
+        }
+    });
+} else if (resumeBook !== undefined && state.view === 'player') {
     history.replaceState({'view': 'library'}, '');
     openBook(resumeBook, {'play': false, 'show': true});
 } else {

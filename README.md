@@ -10,6 +10,19 @@ on your device, in a Web Worker. No server, no recorded speech, no runtime depen
 It is a static site, published with GitHub Pages: `index.html` is the app, and `.nojekyll` keeps GitHub Pages from
 processing the files.
 
+## Links
+
+A book's address is its link, and it follows the listener's section - share it from the player's share button, or
+copy it from the address bar. The link's hash parameters (key=value pairs joined by "&", URL-encoded, as
+[MarkdownUp](https://github.com/craigahobbs/markdown-up)'s) name the book and, optionally, the section:
+
+- `book` - the book's id, stable across catalog builds: `pg` and its Project Gutenberg ebook number (`pg1342`), or
+  `se.` and its Standard Ebooks path with dots for slashes (`se.jane-austen.pride-and-prejudice`)
+- `section` - the section's number in the book's contents (its sections and subsections in order, from 1)
+
+For example, `#book=se.miguel-de-cervantes-saavedra.don-quixote.john-ormsby&section=12` opens Don Quixote at its fifth
+chapter - or at the listener's place, if that is in the section.
+
 ## Layout
 
 - `index.html`, `app.js`, `engine.js`, `worker.js`, `renderworker.js`, `store.js`, `bookcache.js` - the app (copied
