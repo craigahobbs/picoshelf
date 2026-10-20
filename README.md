@@ -30,10 +30,11 @@ chapter - or at the listener's place, if that is in the section.
   synthesizer, at once on two cores
 - `sources/` - the book sources (Project Gutenberg, Standard Ebooks)
 - `lib/` - the catalog and book-format code (catalog search, Gutenberg text cleanup, EPUB and ZIP reading)
-- `data/catalog.json` - the book catalog, each book with its narrator's voice (`make catalog`)
+- `data/catalog.json` - the book catalog, each book with its narrator's voice and its genres (`make catalog`)
 - `tools/` - the catalog builder (`catalog.js` - every Standard Ebooks book and the most-downloaded Project Gutenberg
-  books, its pages cached under `build/catalog/`) and the narrator casting (`voicecast.js` - a local Ollama decision
-  model chooses each book's voice; `voicelabels.json`, 132 hand-cast books, scores the decision models)
+  books, its pages cached under `build/catalog/`), and the decisions a local Ollama decision model makes about each
+  book (`decide.js`): its narrator (`voicecast.js`; `voicelabels.json`, 132 hand-cast books, scores the decision models)
+  and its genres (`genres.js`)
 - `picovox/` - the PicoVox voice - a copy of the npm package `picovox`'s `lib/` (the text front end and G2P, the neural
   model and synthesizer runtime, the synthesis pipeline and sentence splitting the app uses, and the generated model
   modules, `lib/models/`), with its `package.json` (the version) and `LICENSE`
@@ -50,6 +51,18 @@ refined voice, and Moby Dick gets Robert, a deep, weathered one. The casts are c
 casts only new or changed books. `node tools/voicecast.js --eval --model <model>` scores a decision model on the
 hand-cast books; `--book <title>` shows a book's cast. A listener's voice and speed for a book override its defaults
 (the cast voice, at 1×), and the Narrator sheet resets them.
+
+The same decision model chooses each book's genres (`tools/genres.js`): one choice of 23 genres - Adventure, Mystery &
+Crime, Poetry, Children's, ... - about the book's catalog entry, the book's genres its choice and up to two others it
+finds nearly as likely (Alice's Adventures in Wonderland is Children's and Fantasy). `node tools/genres.js --book
+<title>` shows a book's.
+
+## The library
+
+The library is the whole catalog (Library) or the books you've opened (My Library, most recent first), searched by
+title, author, and subject, and shown three ways: all its books, by author (by surname - a book with several authors
+under each), or by genre; an author or a genre opens to its books. The book playing is in the player bar at the
+bottom - close it there (×) to stop, its place kept in My Library.
 
 ## Updating PicoVox
 

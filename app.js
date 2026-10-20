@@ -4,7 +4,7 @@
 // place in every book is kept in browser storage, so reloading or leaving and coming back resumes where they were.
 
 import {deleteCachedBook, getCachedBook, putCachedBook} from './bookcache.js';
-import {findBook, listBooks, pageItems, searchBooks} from './lib/catalog.js';
+import {findBook, groupByAuthor, groupByGenre, listBooks, matchBooks} from './lib/catalog.js';
 import {loadState, newId, saveState} from './store.js';
 import {Engine} from './engine.js';
 import {source as gutenberg} from './sources/gutenberg.js';
@@ -42,11 +42,8 @@ const libraryView = element('libraryView');
 const playerView = element('playerView');
 const miniPlayer = element('miniPlayer');
 const miniPlayerInner = element('miniPlayerInner');
-const continueSection = element('continueSection');
-const continueCard = element('continueCard');
-const shelfSection = element('shelfSection');
-const shelf = element('shelf');
-const sourceTabs = element('sourceTabs');
+const scopeTabs = element('scopeTabs');
+const viewTabs = element('viewTabs');
 const searchForm = element('searchForm');
 const searchInput = element('search');
 const sourceNote = element('sourceNote');
@@ -86,9 +83,12 @@ if (state.settings !== undefined) {
     }
     delete state.settings;
 }
-state.sourceTab ||= 'all';
+// The library's scope (the whole library or my library) and view (all books, by author, or by genre)
+delete state.sourceTab;
+state.scope = ['library', 'mine'].includes(state.scope) ? state.scope : 'library';
+state.libraryView = ['all', 'authors', 'genres'].includes(state.libraryView) ? state.libraryView : 'all';
 let current = null;
-const browseState = {'query': '', 'page': 1, 'books': [], 'hasMore': false, 'total': 0, 'error': null};
+const browseState = {'query': '', 'page': 1, 'books': [], 'error': null, 'openGroups': new Set(), 'scroll': 0};
 let openSheetName = null;
 let lastSave = 0;
 // (?slowdown=N stretches synthesis N times - to reproduce a device slower than real time; ?model=<name> speaks with a
@@ -515,6 +515,7 @@ function sectionTarget(direction) {
 // Show the library
 function showLibrary() {
     closeSheet();
+    const returning = libraryView.hidden;
     state.view = 'library';
     persist();
     playerView.hidden = true;
@@ -522,11 +523,17 @@ function showLibrary() {
     updateAddress();
     renderLibrary();
     renderMiniPlayer();
+    if (returning) {
+        window.scrollTo(0, browseState.scroll);
+    }
 }
 
 
 // Show the player (with a history entry, so the back gesture returns to the library)
 function showPlayer() {
+    if (!libraryView.hidden) {
+        browseState.scroll = window.scrollY;
+    }
     if (playerView.hidden && history.state?.view !== 'player') {
         history.pushState({'view': 'player'}, '');
     }
@@ -654,7 +661,13 @@ function renderMiniPlayer() {
         const play = make('button', 'round-play');
         play.type = 'button';
         play.addEventListener('click', togglePlay);
-        miniPlayerInner.replaceChildren(open, play);
+        const close = make('button', 'icon-button');
+        close.type = 'button';
+        close.setAttribute('aria-label', `Close ${book.title}`);
+        close.title = 'Close';
+        close.append(icon('close'));
+        close.addEventListener('click', closeBook);
+        miniPlayerInner.replaceChildren(open, play, close);
     }
     const playing = isPlayingOrStarting();
     const busy = current.loading && current.playWhenLoaded || engine.state().status === 'buffering';
@@ -667,34 +680,32 @@ function renderMiniPlayer() {
 
 
 // A book list row - open the book on click; with an optional remove button and progress
-function bookRow(book, {progress = false, removable = false, showSource = false} = {}) {
+function bookRow(book, {progress = false, removable = false} = {}) {
     const row = make('li', 'book-row');
     const open = make('button', 'book-open');
     open.type = 'button';
     const text = make('div', 'book-text');
     text.append(make('div', 'book-title', book.title));
     const meta = [book.author];
-    if (showSource && catalog !== null && catalog.sources[book.source]) {
-        meta.push(catalog.sources[book.source].name);
-    }
-    if (progress) {
-        meta.push(book.percent >= 99.5 ? 'Finished' : `${Math.floor(book.percent || 0)}%`);
+    const saved = state.books[bookKey(book)];
+    if (progress && saved !== undefined) {
+        meta.push(saved.percent >= 99.5 ? 'Finished' : `${Math.floor(saved.percent || 0)}%`);
     }
     text.append(make('div', 'book-meta', meta.filter(Boolean).join(' · ')));
-    if (progress) {
+    if (progress && saved !== undefined) {
         const bar = make('div', 'mini-progress');
         const fill = make('div');
-        fill.style.width = `${Math.min(100, book.percent || 0)}%`;
+        fill.style.width = `${Math.min(100, saved.percent || 0)}%`;
         bar.append(fill);
         text.append(bar);
     }
     open.append(coverElement(book), text);
     open.addEventListener('click', () => openBook(book, {'play': false}));
     row.append(open);
-    if (removable) {
+    if (removable && saved !== undefined) {
         const remove = make('button', 'icon-button');
         remove.type = 'button';
-        remove.setAttribute('aria-label', `Remove ${book.title} from your books`);
+        remove.setAttribute('aria-label', `Remove ${book.title} from my library`);
         remove.title = 'Remove';
         remove.append(icon('delete'));
         remove.addEventListener('click', () => removeBook(bookKey(book)));
@@ -709,7 +720,7 @@ function removeBook(key) {
     const book = state.books[key];
     if (book !== undefined) {
         openSheetName = 'confirm';
-        confirmInSheet(`Remove "${book.title}" from your books? Your place and bookmarks in it are removed too.`, 'Remove',
+        confirmInSheet(`Remove "${book.title}" from my library? Your place and bookmarks in it are removed too.`, 'Remove',
             () => removeBookNow(key), closeSheet, 'Remove book');
         if (!sheet.open) {
             sheet.showModal();
@@ -718,13 +729,35 @@ function removeBook(key) {
 }
 
 
+// Close the open book - nothing playing (the book stays in my library, at its place)
+function closeBook() {
+    if (current === null) {
+        return;
+    }
+    savePosition(true);
+    closeSheet();
+    engine.unload();
+    current = null;
+    state.current = null;
+    persist();
+    if ('mediaSession' in navigator) {
+        navigator.mediaSession.metadata = null;
+        navigator.mediaSession.playbackState = 'none';
+        mediaKey = '';
+    }
+    if (!playerView.hidden) {
+        showLibrary();
+    }
+    renderMiniPlayer();
+    renderLibrary();
+}
+
+
 // Remove a book now
 function removeBookNow(key) {
     closeSheet();
     if (current !== null && current.key === key) {
-        engine.pause();
-        current = null;
-        state.current = null;
+        closeBook();
     }
     delete state.books[key];
     delete state.bookmarks[key];
@@ -735,130 +768,144 @@ function removeBookNow(key) {
 }
 
 
-// Render the library - continue listening, your books, and the source tabs
+// Render the library - the scope (the whole library or my library), the view (all, authors, or genres), and the
+// books
 function renderLibrary() {
-    const currentBook = state.current === null ? undefined : state.books[state.current];
-    continueSection.hidden = currentBook === undefined;
-    if (currentBook !== undefined) {
-        const open = make('button', 'book-open');
-        open.type = 'button';
-        const text = make('div', 'book-text');
-        const bar = make('div', 'mini-progress');
-        const fill = make('div');
-        fill.style.width = `${Math.min(100, currentBook.percent || 0)}%`;
-        bar.append(fill);
-        const where = [currentBook.chapter, `${Math.floor(currentBook.percent || 0)}%`, formatRemaining(currentBook.remaining)];
-        text.append(
-            make('div', 'book-title', currentBook.title),
-            make('div', 'book-meta', currentBook.author),
-            make('div', 'book-meta', where.filter(Boolean).join(' · ')),
-            bar
-        );
-        open.append(coverElement(currentBook), text);
-        open.addEventListener('click', showPlayer);
-        if (current === null || current.key !== state.current) {
-            open.addEventListener('click', () => openBook(currentBook, {'play': false}), {'once': true});
-        }
-        const play = make('button', 'round-play');
-        play.type = 'button';
-        play.id = 'continuePlay';
-        play.addEventListener('click', () => {
-            if (current !== null && current.key === state.current) {
-                togglePlay();
-            } else {
-                openBook(currentBook, {'play': true, 'show': false});
-            }
-            renderLibrary();
-        });
-        continueCard.replaceChildren(open, play);
-        renderContinuePlay();
-    }
-    const others = Object.entries(state.books).filter(([key]) => key !== state.current).
-        sort(([, first], [, second]) => (second.updated || 0) - (first.updated || 0));
-    shelfSection.hidden = others.length === 0;
-    shelf.replaceChildren(...others.map(([, book]) => bookRow(book, {'progress': true, 'removable': true})));
+    renderTabs();
+    browse(searchInput.value.trim(), 1);
 }
 
 
-// Render the continue-listening card's play button for the open book's state
-function renderContinuePlay() {
-    const play = document.getElementById('continuePlay');
-    if (play !== null) {
-        const isOpen = current !== null && current.key === state.current;
-        const busy = isOpen && (current.loading && current.playWhenLoaded || engine.state().status === 'buffering');
-        const playing = isOpen && isPlayingOrStarting();
-        setPlayIcon(play, busy ? 'busy' : (playing ? 'pause' : 'play'), playing ? 'Pause' : 'Play');
-    }
-}
-
-
-// Render the source tabs - all books, or one source's
+// Render the scope and view tabs
 function renderTabs() {
-    if (catalog === null) {
-        return;
-    }
-    // Short tab labels - they fit on a phone ('Project Gutenberg' -> 'Gutenberg')
-    const tabs = [['all', 'All'], ...Object.entries(catalog.sources).map(([id, source]) => [id, source.name.replace(/^Project /, '')])];
-    if (!tabs.some(([id]) => id === state.sourceTab)) {
-        state.sourceTab = 'all';
-    }
-    sourceTabs.replaceChildren(...tabs.map(([id, name]) => {
-        const tab = make('button', '', name);
-        tab.type = 'button';
-        tab.setAttribute('role', 'tab');
-        tab.setAttribute('aria-selected', String(id === state.sourceTab));
-        tab.addEventListener('click', () => {
-            if (state.sourceTab !== id) {
-                state.sourceTab = id;
-                persist();
-                renderTabs();
-                browse(searchInput.value.trim(), 1);
-            }
-        });
-        return tab;
-    }));
-    const source = catalog.sources[state.sourceTab];
-    const sourceNames = Object.values(catalog.sources).map((other) => other.name).join(' and ');
-    sourceNote.textContent = source === undefined ?
-        `${catalog.books.length.toLocaleString()} public-domain books from ${sourceNames}.` : source.description;
+    const tabs = (container, choices, selected, onSelect) => {
+        container.replaceChildren(...choices.map(([id, name]) => {
+            const tab = make('button', '', name);
+            tab.type = 'button';
+            tab.setAttribute('role', 'tab');
+            tab.setAttribute('aria-selected', String(id === selected));
+            tab.addEventListener('click', () => {
+                if (id !== selected) {
+                    onSelect(id);
+                    browseState.openGroups.clear();
+                    persist();
+                    renderLibrary();
+                }
+            });
+            return tab;
+        }));
+    };
+    tabs(scopeTabs, [['library', 'Library'], ['mine', 'My Library']], state.scope, (scope) => {
+        state.scope = scope;
+    });
+    tabs(viewTabs, [['all', 'All'], ['authors', 'Authors'], ['genres', 'Genres']], state.libraryView, (view) => {
+        state.libraryView = view;
+    });
 }
 
 
-// Browse the catalog - the selected source's books by popularity, or search results; page 1 replaces, later pages
-// append
+// The scope's books - the whole library's (the catalog's, by popularity), or my library's (the books the listener has
+// opened, most recently listened first, with their catalog details - for their authors and genres)
+function scopeBooks() {
+    if (state.scope === 'mine') {
+        return Object.values(state.books).sort((first, second) => (second.updated || 0) - (first.updated || 0)).
+            map((book) => ({...(catalog === null ? null : findBook(catalog, book.source, book.id)), ...book}));
+    }
+    return catalog === null ? [] : listBooks(catalog);
+}
+
+
+// Browse the scope's books - all, or a search's matches; page 1 replaces the list, later pages (the all view's) extend it
 function browse(query, page) {
     browseState.query = query;
     browseState.page = page;
-    if (catalog === null) {
-        renderResults();
-        return;
-    }
-    const books = query === '' ? listBooks(catalog, state.sourceTab) : searchBooks(catalog, query, state.sourceTab);
-    const paged = pageItems(books, page, 24);
-    browseState.books = page === 1 ? paged.items : [...browseState.books, ...paged.items];
-    browseState.hasMore = paged.hasMore;
-    browseState.total = paged.total;
+    browseState.books = matchBooks(scopeBooks(), query);
     renderResults();
 }
 
 
-// Render the browse results
+// The books shown at once (and per More)
+const pageSize = 24;
+
+
+// Render the books - a list (all), or groups by author or genre
 function renderResults() {
-    results.replaceChildren(...browseState.books.map((book) => bookRow(book, {'showSource': state.sourceTab === 'all'})));
+    const mine = state.scope === 'mine';
+    const {books, query} = browseState;
+    const row = (book) => bookRow(book, {'progress': book.percent !== undefined || bookKey(book) in state.books, 'removable': mine});
+    let groups = null;
+    if (state.libraryView === 'all') {
+        const list = make('ul', 'book-list');
+        list.append(...books.slice(0, pageSize * browseState.page).map(row));
+        results.replaceChildren(list);
+    } else {
+        groups = state.libraryView === 'authors' ? groupByAuthor(books) : groupByGenre(books, catalog?.genres ?? {});
+        // A search's few groups open at once
+        const openAll = query !== '' && groups.length <= 3;
+        results.replaceChildren(...groups.map((group) => groupElement(group, row, openAll)));
+    }
+    moreButton.hidden = state.libraryView !== 'all' || books.length <= pageSize * browseState.page;
+
+    // The note and the status
+    if (mine) {
+        sourceNote.textContent = Object.keys(state.books).length === 0 ? 'Books you open appear here.' :
+            'The books you\'ve opened, most recent first.';
+    } else if (catalog !== null) {
+        const sourceNames = Object.values(catalog.sources).map((source) => source.name).join(' and ');
+        sourceNote.textContent = `${catalog.books.length.toLocaleString()} public-domain books from ${sourceNames}.`;
+    } else {
+        sourceNote.textContent = '';
+    }
     let status = '';
-    if (browseState.error !== null) {
+    if (browseState.error !== null && !mine) {
         status = browseState.error;
-    } else if (catalog === null) {
+    } else if (catalog === null && !mine) {
         status = 'Loading the catalog...';
-    } else if (browseState.books.length === 0) {
-        status = browseState.query === '' ? 'No books found.' : `No books match "${browseState.query}".`;
-    } else if (browseState.query !== '') {
-        const matches = browseState.total === 1 ? 'book matches' : 'books match';
-        status = `${browseState.total.toLocaleString()} ${matches} "${browseState.query}".`;
+    } else if (books.length === 0) {
+        status = query === '' ? (mine ? '' : 'No books found.') : `No books match "${query}".`;
+    } else if (query !== '') {
+        const matches = books.length === 1 ? '1 book matches' : `${books.length.toLocaleString()} books match`;
+        const grouped = groups === null ? '' : ` (${groups.length.toLocaleString()} ${state.libraryView === 'authors' ?
+            (groups.length === 1 ? 'author' : 'authors') : (groups.length === 1 ? 'genre' : 'genres')})`;
+        status = `${matches} "${query}"${grouped}.`;
     }
     resultsStatus.textContent = status;
-    resultsStatus.classList.toggle('error', browseState.error !== null);
-    moreButton.hidden = !browseState.hasMore;
+    resultsStatus.classList.toggle('error', browseState.error !== null && !mine);
+}
+
+
+// A group - an author or a genre: its name and book count, and its books when opened (pageSize at a time); groups the
+// listener opened stay open as the library re-renders
+function groupElement(group, row, open) {
+    const id = `${state.libraryView}:${group.key ?? group.name}`;
+    const details = make('details', 'group');
+    const summary = make('summary');
+    const count = make('span', 'group-count', group.books.length.toLocaleString());
+    summary.append(icon('chevron'), make('span', 'group-name', group.name), count);
+    details.append(summary);
+    const list = make('ul', 'book-list');
+    const more = make('button', 'button group-more', 'More');
+    more.type = 'button';
+    let shown = 0;
+    const showMore = () => {
+        list.append(...group.books.slice(shown, shown + pageSize).map(row));
+        shown = Math.min(group.books.length, shown + pageSize);
+        more.hidden = shown >= group.books.length;
+    };
+    more.addEventListener('click', showMore);
+    details.addEventListener('toggle', () => {
+        if (details.open) {
+            browseState.openGroups.add(id);
+            if (shown === 0) {
+                details.append(list, more);
+                showMore();
+            }
+        } else {
+            browseState.openGroups.delete(id);
+        }
+    });
+    details.open = open || browseState.openGroups.has(id);
+    return details;
 }
 
 
@@ -1316,7 +1363,6 @@ setInterval(() => {
     updateAddress();
     if (!miniPlayer.hidden) {
         renderMiniPlayer();
-        renderContinuePlay();
     }
     if (current !== null && isPlayingOrStarting()) {
         savePosition(false);
@@ -1328,8 +1374,7 @@ setInterval(() => {
 browse('', 1);
 catalogPromise.then((loaded) => {
     catalog = loaded;
-    renderTabs();
-    browse(searchInput.value.trim(), 1);
+    renderLibrary();
 }, (error) => {
     browseState.error = error.message;
     renderResults();

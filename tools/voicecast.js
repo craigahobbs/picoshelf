@@ -1,7 +1,7 @@
 // Cast each catalog book's narrator - a local Ollama decision model chooses the PicoVox voice that suits the book (its
 // author, narrator, genre, and tone): Jane Austen a composed, proper woman's voice, Moby Dick a deep, weathered man's.
 // The decision model answers a typed choice question about the book's catalog entry with each voice's probability, in
-// one forward pass (Ollama's /v1/systemone endpoint - called directly, as ollama-chat calls Ollama's API).
+// one forward pass (tools/decide.js).
 //
 // node tools/voicecast.js [--model <model>] [--scheme <scheme>] [--eval] [--book <title>]
 //
@@ -13,21 +13,17 @@
 //   --book <title>     cast the catalog books whose title contains this
 //
 // The catalog builder (tools/catalog.js) casts every book; each cast is cached under build/catalog/voices/ by model,
-// scheme, and the book's details, so a rebuild casts only new or changed books. A cast takes about 0.7 s on an M3 Max,
-// the GPU's whole - casts at once, from one Ollama server or several, are no faster. OLLAMA_HOST sets Ollama's address.
+// scheme, and the book's details, so a rebuild casts only new or changed books.
 
-import {dirname, join} from 'node:path';
-import {existsSync, mkdirSync, readFileSync, renameSync, writeFileSync} from 'node:fs';
-import {createHash} from 'node:crypto';
+import {catalogBooks, checkModel, decide, decideBooks, decisionModel, root} from './decide.js';
 import {fileURLToPath} from 'node:url';
+import {join} from 'node:path';
 import process from 'node:process';
+import {readFileSync} from 'node:fs';
 
-
-const root = fileURLToPath(new URL('..', import.meta.url));
-const cacheDir = join(root, 'build', 'catalog', 'voices');
 
 // The default decision model and questions
-export const castModel = 'kev:9b-nvfp4';
+export const castModel = decisionModel;
 export const castScheme = 'voice';
 
 // The voice question's instructions
@@ -94,61 +90,14 @@ const schemeQuestions = {
 };
 
 
-// An Ollama API URL (OLLAMA_HOST, as Ollama's tools)
-function ollamaURL(path) {
-    const host = process.env.OLLAMA_HOST ?? '127.0.0.1:11434';
-    return `${host.includes('://') ? host : `http://${host}`}${path}`;
-}
-
-
-// POST a request to an Ollama API - its JSON response, or an error with Ollama's message
-async function ollamaPost(path, body) {
-    const response = await fetch(ollamaURL(path), {
-        'method': 'POST', 'headers': {'Content-Type': 'application/json'}, 'body': JSON.stringify(body)
-    });
-    const text = await response.text();
-    let result = null;
-    try {
-        result = JSON.parse(text);
-    } catch {
-        // Not JSON - the error below
-    }
-    if (!response.ok || result === null || 'error' in result) {
-        throw new Error(`Ollama ${path} (${response.status}): ${result?.error ?? text.slice(0, 200)}`);
-    }
-    return result;
-}
-
-
-// Check that the model is local and is a decision model
-export async function checkModel(model) {
-    let show;
-    try {
-        show = await ollamaPost('/api/show', {model});
-    } catch (error) {
-        throw new Error(`Unknown model "${model}" - ollama pull ${model} (${error.message})`, {'cause': error});
-    }
-    if (!(show.capabilities ?? []).includes('decision')) {
-        throw new Error(`"${model}" isn't a decision model`);
-    }
-}
-
-
-// A book's state for the decision model - its catalog details
-export function bookState(book) {
-    return {
-        'title': book.subtitle ? `${book.title}: ${book.subtitle}` : book.title,
-        'author': book.author || 'Anonymous',
-        'subjects': (book.subjects ?? []).join(', '),
-        'description': book.description ?? ''
-    };
-}
-
-
 // Cast a book - {voice, probabilities (each voice's)}
 export async function castBook(book, {model = castModel, scheme = castScheme} = {}) {
-    const questions = schemeQuestions[scheme];
-    const {answers} = await ollamaPost('/v1/systemone', {model, 'state': bookState(book), questions, 'keep_alive': '10m'});
+    return castAnswer(await decide(book, {model, 'questions': schemeQuestions[scheme]}), scheme);
+}
+
+
+// A cast from the answers - {voice, probabilities}
+function castAnswer(answers, scheme) {
     if (scheme === 'voice') {
         return {'voice': answers.voice.choice, 'probabilities': answers.voice.probabilities};
     }
@@ -167,44 +116,11 @@ export async function castBook(book, {model = castModel, scheme = castScheme} = 
 
 // Cast books - each book's voice key, by "source|id". Casts are cached by model, scheme, and the book's state.
 export async function castBooks(books, {model = castModel, scheme = castScheme, log = null} = {}) {
-    await checkModel(model);
-    const cachePath = join(cacheDir, `${model.replace(/[^a-zA-Z0-9.-]/g, '_')}-${scheme}.json`);
-    const cache = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, 'utf-8')) : {};
-    const questionsHash = createHash('sha256').update(JSON.stringify(schemeQuestions[scheme])).digest('hex').slice(0, 12);
-    const voices = {};
-    let cast = 0;
-    const start = Date.now();
-    for (const book of books) {
-        const key = `${book.source}|${book.id}`;
-        const hash = createHash('sha256').update(`${questionsHash}|${JSON.stringify(bookState(book))}`).digest('hex').slice(0, 16);
-        if (cache[key]?.hash !== hash) {
-            cache[key] = {hash, ...await castBook(book, {model, scheme})};
-            cast++;
-            if (cast % 100 === 0) {
-                writeCache(cachePath, cache);
-                log?.(`Voices: ${cast} books cast (${((Date.now() - start) / cast).toFixed(0)} ms a book)`);
-            }
-        }
-        voices[key] = cache[key].voice;
-    }
-    writeCache(cachePath, cache);
-    const speed = cast > 0 ? `, ${((Date.now() - start) / cast).toFixed(0)} ms a book` : '';
-    log?.(`Voices: ${books.length} books (${cast} cast with ${model}${speed})`);
-    return voices;
-}
-
-
-// Write the cast cache, so an interrupted write never leaves a partial file
-function writeCache(path, cache) {
-    mkdirSync(dirname(path), {'recursive': true});
-    writeFileSync(`${path}.tmp`, JSON.stringify(cache));
-    renameSync(`${path}.tmp`, path);
-}
-
-
-// The catalog's books
-function catalogBooks() {
-    return JSON.parse(readFileSync(join(root, 'data', 'catalog.json'), 'utf-8')).books;
+    const casts = await decideBooks(books, {
+        model, 'questions': schemeQuestions[scheme], 'answer': (answers) => castAnswer(answers, scheme),
+        'cacheName': `voices/${model.replace(/[^a-zA-Z0-9.-]/g, '_')}-${scheme}`, 'label': 'Voices', log
+    });
+    return Object.fromEntries(Object.entries(casts).map(([key, cast]) => [key, cast.voice]));
 }
 
 
