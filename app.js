@@ -9,6 +9,7 @@ import {loadState, newId, saveState} from './store.js';
 import {Engine} from './engine.js';
 import {source as gutenberg} from './sources/gutenberg.js';
 import {source as standardEbooks} from './sources/standardebooks.js';
+import {voiceTable} from './picovox/lib/synthesis.js';
 
 
 // The book sources' loaders, and the catalog (loaded at startup)
@@ -25,7 +26,11 @@ const catalogPromise = fetch(new URL('./data/catalog.json', import.meta.url)).th
 // The skip distance (s), the narrator speeds, and the narrator voices
 const skipSeconds = 30;
 const speeds = [0.8, 1, 1.2, 1.4, 1.6];
-const voiceChoices = [['neural-male', 'Male'], ['neural-female', 'Female']];
+// (the app's keys for PicoVox's male and female voices are neural-male and neural-female - listeners' saved settings;
+// the designed voices are PicoVox's keys)
+const voiceChoices = voiceTable.map(({key, label, sex, description}) => ({
+    'value': key === 'male' || key === 'female' ? `neural-${key}` : key, label, sex, description
+}));
 
 
 // Elements
@@ -66,8 +71,8 @@ const sheetBody = element('sheetBody');
 const state = loadState();
 // The narrator is a neural voice - listeners who chose a classic (rule) voice get its neural counterpart
 const classicVoices = {'male': 'neural-male', 'female': 'neural-female'};
-if (!voiceChoices.some(([voice]) => voice === state.settings.voice)) {
-    state.settings.voice = classicVoices[state.settings.voice] || voiceChoices[0][0];
+if (!voiceChoices.some(({value}) => value === state.settings.voice)) {
+    state.settings.voice = classicVoices[state.settings.voice] || voiceChoices[0].value;
 }
 delete state.settings.neuralDefault;
 state.sourceTab ||= 'all';
@@ -907,10 +912,33 @@ function renderSettings() {
         engine.setVoice(state.settings);
         renderSettings();
     };
+    // The voice - a list by sex, with the voice's description
+    const voiceSetting = () => {
+        const section = make('section', 'setting');
+        section.append(make('h3', '', 'Voice'));
+        const select = make('select', 'voice-select');
+        select.setAttribute('aria-label', 'Voice');
+        for (const [sex, label] of [['female', 'Female voices'], ['male', 'Male voices']]) {
+            const group = document.createElement('optgroup');
+            group.label = label;
+            for (const voice of voiceChoices.filter((item) => item.sex === sex)) {
+                const option = make('option', '', voice.label);
+                option.value = voice.value;
+                option.selected = voice.value === state.settings.voice;
+                group.append(option);
+            }
+            select.append(group);
+        }
+        select.addEventListener('change', () => apply({'voice': select.value}));
+        section.append(select);
+        const selected = voiceChoices.find((voice) => voice.value === state.settings.voice);
+        section.append(make('p', 'muted', selected.description));
+        return section;
+    };
     const note = make('p', 'muted', 'The voices are synthesized in your browser - no recordings. A small neural network, ' +
         'trained on 53 hours of 237 American audiobook readers, drives a model of the human voice.');
     sheetBody.replaceChildren(
-        choice('Voice', voiceChoices, state.settings.voice, (voice) => apply({voice})),
+        voiceSetting(),
         choice('Speed', speeds.map((speed) => [speed, `${speed}×`]), state.settings.rate, (rate) => apply({rate})),
         note
     );
