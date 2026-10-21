@@ -1155,7 +1155,7 @@ function nearestSpeed(rate) {
 function narrator() {
     const book = state.books[current.key];
     const voice = voiceChoices.some(({value}) => value === book.voice) ? book.voice : (current.defaultVoice ?? fallbackVoice);
-    return {voice, 'rate': typeof book.rate === 'number' ? nearestSpeed(book.rate) : defaultRate};
+    return {voice, 'rate': typeof book.rate === 'number' ? nearestSpeed(book.rate) : defaultRate, 'expressive': state.expressive !== false};
 }
 
 
@@ -1245,10 +1245,20 @@ function renderSettings() {
     };
     const note = make('p', 'muted', 'The voices are synthesized in your browser - no recordings. A small neural network, ' +
         'trained on 53 hours of 237 American audiobook readers, drives a model of the human voice.');
+    // Expressive dialogue - a listener's preference for every book (on by default)
+    const expressive = choice('Expressive dialogue', [[false, 'Off'], [true, 'On']], state.expressive !== false, (value) => {
+        state.expressive = value;
+        persist();
+        engine.setVoice(narrator());
+        renderSettings();
+    });
+    expressive.append(make('p', 'muted', 'The dialogue\'s angry, shouted, and frightened lines are voiced so, ' +
+        'the narration plain.'));
     sheetBody.replaceChildren(
         voiceSetting(),
         choice('Speed', speeds.map((speed) => [speed, `${speed}×`]), rate, (value) => apply({'rate': value})),
         resetSetting(),
+        expressive,
         note
     );
 }

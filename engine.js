@@ -3,6 +3,7 @@
 // demand a few minutes ahead of the position. Playback schedules each unit's streamed blocks with Web Audio, and only the
 // audio near the position is kept, so a whole book costs no more than a chapter.
 
+import {autoStyles, loadStyleModel, paragraphBeats} from './picovox/lib/style.js';
 import {speechText, splitSentences} from './picovox/lib/sentences.js';
 import {encodeWav} from './picovox/lib/wav.js';
 
@@ -57,6 +58,20 @@ export class Engine {
     }, slowdown = 1, voiceModelUrl = undefined} = {}) {
         this.onChange = onChange;
         this.slowdown = slowdown;
+        // The style network (expressive dialogue - the quotations' angry, shouted, and frightened words), loaded at once:
+        // it's small, but a cached book can open first, so an expressive session's synthesis waits for it (styleSettled)
+        this.styleModel = null;
+        this.styleSettled = false;
+        import('./picovox/lib/models/styleModel.js').then((module) => {
+            this.styleModel = loadStyleModel(module);
+        }, () => {
+            // No style network - the dialogue reads neutral
+        }).finally(() => {
+            this.styleSettled = true;
+            if (this.session !== null && this.session.expressive && this.session.units.length !== 0) {
+                this.ensureSynthesis(this.unit);
+            }
+        });
         this.audioContext = null;
         this.output = null;
         this.mediaElement = null;
@@ -154,8 +169,9 @@ export class Engine {
         return this.session !== null;
     }
 
-    // Load a book's text, paused at a character offset (snapped to its sentence) - with the voice and rate
-    load(text, {voice = 'neural-male', rate = 1} = {}, startChar = 0) {
+    // Load a book's text, paused at a character offset (snapped to its sentence) - with the voice, rate, and expressive
+    // dialogue (the quotations styled)
+    load(text, {voice = 'neural-male', rate = 1, expressive = false} = {}, startChar = 0) {
         this.stopSources();
         this.cancelRun();
         this.playing = false;
@@ -165,7 +181,8 @@ export class Engine {
         this.measuredSeconds = 0;
         const units = splitSentences(text);
         this.session = {
-            text, units, voice, rate, 'runs': [], 'runIds': new Set(),
+            text, units, voice, rate, expressive, 'styles': null, 'beats': expressive ? paragraphBeats(units) : null, 'runs': [],
+            'runIds': new Set(),
             'cache': units.map(() => ({'blocks': [], 'length': 0, 'done': false, 'run': null, 'startedAt': null}))
         };
         this.unit = units.length === 0 ? 0 : this.unitAtChar(startChar);
@@ -191,14 +208,15 @@ export class Engine {
         this.notify();
     }
 
-    // Change the voice or rate - continuing from the current sentence
-    setVoice({voice, rate}) {
-        if (this.session === null || (voice === this.session.voice && rate === this.session.rate)) {
+    // Change the voice, rate, or expressive dialogue - continuing from the current sentence
+    setVoice({voice, rate, expressive = false}) {
+        const {session} = this;
+        if (session === null || (voice === session.voice && rate === session.rate && expressive === session.expressive)) {
             return;
         }
         const wasPlaying = this.playing;
         const {unit} = this.position();
-        this.load(this.session.text, {voice, rate}, this.session.units[unit].start);
+        this.load(this.session.text, {voice, rate, expressive}, this.session.units[unit].start);
         if (wasPlaying) {
             this.play();
         }
@@ -526,6 +544,10 @@ export class Engine {
     // first missing unit next
     ensureSynthesis(from) {
         const {session} = this;
+        // Expressive dialogue's synthesis waits for the style network, so the first units are styled too
+        if (session.expressive && !this.styleSettled) {
+            return;
+        }
         const remaining = [];
         const charLimit = session.units[from].start + windowChars;
         for (let unit = from; unit < session.units.length && unit < from + windowUnits; unit++) {
@@ -557,6 +579,10 @@ export class Engine {
         }
         session.runs = [];
         const unstarted = remaining.filter((unit) => session.cache[unit].run === null);
+        // The quotations' styles (expressive dialogue), once the style network is loaded
+        if (session.expressive && session.styles === null && this.styleModel !== null) {
+            session.styles = autoStyles(this.styleModel, session.units);
+        }
         this.mark(`synthesis from unit ${from}: units ${unstarted[0]}-${unstarted[unstarted.length - 1]} dealt`);
         this.workers.forEach(({worker}, slot) => {
             const order = unstarted.filter((unit, index) => index % this.workers.length === slot);
@@ -568,7 +594,9 @@ export class Engine {
                     'type': 'units', id, 'voice': session.voice, 'rate': session.rate,
                     'units': order.map((unit) => {
                         const {index, text, paragraphStart} = session.units[unit];
-                        return {index, 'text': speechText(text), paragraphStart};
+                        const spans = session.styles?.spans(index)?.map((span) => ({'text': speechText(span.text), 'style': span.style}));
+                        const beat = session.beats?.[index] ?? null;
+                        return {index, 'text': speechText(text), paragraphStart, 'spans': spans ?? null, beat};
                     })
                 });
             }
