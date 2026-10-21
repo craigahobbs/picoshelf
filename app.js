@@ -824,11 +824,13 @@ function renderTabs() {
 
 
 // The scope's books - the whole library's (the catalog's, by popularity), or my library's (the books the listener has
-// opened, most recently listened first, with their catalog details - for their authors and genres)
+// opened, most recently listened first, with their catalog details - for their authors and genres; a Wikipedia article,
+// in the catalog or not, is in the Wikipedia genre)
 function scopeBooks() {
     if (state.scope === 'mine') {
         return Object.values(state.books).sort((first, second) => (second.updated || 0) - (first.updated || 0)).
-            map((book) => ({...(catalog === null ? null : findBook(catalog, book.source, book.id)), ...book}));
+            map((book) => (book.source === 'wikipedia' ? {...book, 'genres': [wikipediaGenre]} :
+                {...(catalog === null ? null : findBook(catalog, book.source, book.id)), ...book}));
     }
     return catalog === null ? [] : listBooks(catalog);
 }
@@ -895,6 +897,9 @@ async function browseWikipedia(query, page) {
 // The books shown at once (and per More)
 const pageSize = 24;
 
+// The Wikipedia articles' genre (my library's Genres view)
+const wikipediaGenre = 'wikipedia';
+
 
 // Render the books - a list (all), or groups by author or genre; Wikipedia's articles, a list
 function renderResults() {
@@ -911,7 +916,8 @@ function renderResults() {
         list.append(...books.slice(0, pageSize * browseState.page).map(row));
         results.replaceChildren(list);
     } else {
-        groups = state.libraryView === 'authors' ? groupByAuthor(books) : groupByGenre(books, catalog?.genres ?? {});
+        groups = state.libraryView === 'authors' ? groupByAuthor(books) :
+            groupByGenre(books, {...catalog?.genres, [wikipediaGenre]: 'Wikipedia'});
         // A search's few groups open at once
         const openAll = query !== '' && groups.length <= 3;
         results.replaceChildren(...groups.map((group) => groupElement(group, row, openAll)));
