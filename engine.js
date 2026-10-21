@@ -27,6 +27,10 @@ const keepBehindUnits = 8;
 // The initial speaking rate estimate (characters per second at rate 1), refined by measurement
 const defaultCharsPerSecond = 14;
 
+// On iOS, how long a paused book keeps the page's audio session (its media element playing silence) - so the lock
+// screen's Now Playing stays the book's through a pause, not another app's - before releasing it (s)
+const keepSessionSeconds = 600;
+
 
 // The engine - load a book, then play, pause, skip, and seek. onChange(state) is called when the state changes (playing,
 // paused, buffering, ended, or a new unit), and the caller may poll state() for the position.
@@ -186,9 +190,7 @@ export class Engine {
     unload() {
         this.stopSources();
         this.cancelRun();
-        if (this.mediaElement !== null) {
-            this.mediaElement.pause();
-        }
+        this.releaseMedia();
         this.playing = false;
         this.ended = false;
         this.session = null;
@@ -229,6 +231,7 @@ export class Engine {
         this.mark(`play (unit ${this.unit}: ${cell.blocks.length} blocks ready${cell.done ? ', complete' : ''}; worker ${worker})`);
         this.awaitingFirstBlock = cell.blocks.length === 0;
         this.awaitingFirstSchedule = true;
+        clearTimeout(this.releaseTimer);
         this.ensureAudio();
         if (this.ended) {
             this.ended = false;
@@ -246,11 +249,27 @@ export class Engine {
             this.playing = false;
             this.unit = current.unit;
             this.time = current.time;
-            if (this.mediaElement !== null) {
-                this.mediaElement.pause();
-            }
+            this.releaseMedia(isAppleMobile() ? keepSessionSeconds : 0);
             this.notify();
         }
+    }
+
+    // Pause the media element - after delaySeconds (a later play keeps it), or at once
+    releaseMedia(delaySeconds = 0) {
+        clearTimeout(this.releaseTimer);
+        if (this.mediaElement === null) {
+            return;
+        }
+        if (delaySeconds === 0) {
+            this.mediaElement.pause();
+            return;
+        }
+        this.releaseTimer = setTimeout(() => {
+            if (!this.playing) {
+                this.mark('audio session released');
+                this.mediaElement.pause();
+            }
+        }, delaySeconds * 1000);
     }
 
     // Toggle play and pause
@@ -676,9 +695,7 @@ export class Engine {
         this.ended = true;
         this.unit = this.session.units.length - 1;
         this.time = this.unitComplete(this.unit) ? this.unitLength(this.unit) : 0;
-        if (this.mediaElement !== null) {
-            this.mediaElement.pause();
-        }
+        this.releaseMedia();
         this.notify();
     }
 

@@ -757,6 +757,7 @@ function closeBook() {
     if ('mediaSession' in navigator) {
         navigator.mediaSession.metadata = null;
         navigator.mediaSession.playbackState = 'none';
+        mediaPosition = null;
         mediaKey = '';
     }
     if (!playerView.hidden) {
@@ -1368,15 +1369,25 @@ function renderSettings() {
 // The lock screen and media keys
 let mediaHandlersSet = false;
 let mediaKey = '';
+let mediaPosition = null;
 function updateMediaSession() {
     if (!('mediaSession' in navigator) || current === null) {
         return;
     }
     if (!mediaHandlersSet) {
         mediaHandlersSet = true;
+        // (On iOS a paused book keeps its audio session a while - engine.js keepSessionSeconds - and the lock screen may
+        // then show the pause button: pause on a paused book plays it, so the button does what it shows either way)
         const handlers = {
-            'play': () => engine.play(), 'pause': () => engine.pause(), 'seekbackward': () => skip(-skipSeconds),
-            'seekforward': () => skip(skipSeconds), 'previoustrack': () => skip(-skipSeconds), 'nexttrack': () => skip(skipSeconds)
+            'play': () => engine.play(), 'pause': () => (engine.playing ? engine.pause() : engine.play()),
+            'seekbackward': () => skip(-skipSeconds), 'seekforward': () => skip(skipSeconds), 'previoustrack': () => skip(-skipSeconds),
+            'nexttrack': () => skip(skipSeconds),
+            'seekto': (details) => {
+                if (engine.loaded && !current.loading && Number.isFinite(details.seekTime)) {
+                    engine.seekChar(details.seekTime * engine.charsPerSecond());
+                    savePosition(true);
+                }
+            }
         };
         for (const [action, handler] of Object.entries(handlers)) {
             try {
@@ -1396,7 +1407,28 @@ function updateMediaSession() {
             'album': book.title, 'artwork': book.cover ? [{'src': book.cover, 'sizes': '512x768', 'type': 'image/jpeg'}] : []
         });
     }
-    navigator.mediaSession.playbackState = isPlayingOrStarting() ? 'playing' : 'paused';
+    const playing = isPlayingOrStarting();
+    navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+
+    // The lock screen's position and length - the book's estimated time at the narrator's measured speaking rate - set
+    // when playing starts or stops, when the position jumps (a seek), and every 10 seconds (the estimate settles)
+    if (engine.loaded && !current.loading && typeof navigator.mediaSession.setPositionState === 'function') {
+        const charsPerSecond = engine.charsPerSecond();
+        const duration = engine.textLength() / charsPerSecond;
+        const position = Math.min(duration, engine.state().char / charsPerSecond);
+        const now = performance.now();
+        const expected = mediaPosition === null ? null :
+            mediaPosition.position + (mediaPosition.playing ? (now - mediaPosition.at) / 1000 : 0);
+        if (mediaPosition === null || mediaPosition.playing !== playing || Math.abs(expected - position) > 2 ||
+            now - mediaPosition.at > 10000) {
+            mediaPosition = {'at': now, position, playing};
+            try {
+                navigator.mediaSession.setPositionState({duration, 'playbackRate': 1, position});
+            } catch {
+                // An invalid state (a book still measuring its length) - the next update sets it
+            }
+        }
+    }
 }
 
 
