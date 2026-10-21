@@ -9,11 +9,12 @@ import {loadState, newId, saveState} from './store.js';
 import {Engine} from './engine.js';
 import {source as gutenberg} from './sources/gutenberg.js';
 import {source as standardEbooks} from './sources/standardebooks.js';
+import {articleBook, articleVoice, searchArticles, todaysArticles, source as wikipedia} from './sources/wikipedia.js';
 import {voiceTable} from './picovox/lib/synthesis.js';
 
 
 // The book sources' loaders, and the catalog (loaded at startup)
-const loaders = Object.fromEntries([standardEbooks, gutenberg].map((source) => [source.id, source]));
+const loaders = Object.fromEntries([standardEbooks, gutenberg, wikipedia].map((source) => [source.id, source]));
 let catalog = null;
 const catalogPromise = fetch(new URL('./data/catalog.json', import.meta.url)).then((response) => {
     if (!response.ok) {
@@ -85,7 +86,7 @@ if (state.settings !== undefined) {
 }
 // The library's scope (the whole library or my library) and view (all books, by author, or by genre)
 delete state.sourceTab;
-state.scope = ['library', 'mine'].includes(state.scope) ? state.scope : 'library';
+state.scope = ['library', 'wikipedia', 'mine'].includes(state.scope) ? state.scope : 'library';
 state.libraryView = ['all', 'authors', 'genres'].includes(state.libraryView) ? state.libraryView : 'all';
 let current = null;
 const browseState = {'query': '', 'page': 1, 'books': [], 'error': null, 'openGroups': new Set(), 'scroll': 0};
@@ -155,12 +156,16 @@ function bookKey(book) {
 }
 
 
-// A book's link id - stable across catalog builds: its Project Gutenberg ebook number (pg1342), or its Standard Ebooks
+// A book's link id - stable across catalog builds: its Project Gutenberg ebook number (pg1342), its Standard Ebooks
 // path (se.jane-austen.pride-and-prejudice - the path's segments are lowercase letters, digits, hyphens, and
-// underscores, so the id needs no URL encoding)
+// underscores, so the id needs no URL encoding), or a Wikipedia article's title, as Wikipedia's links write it
+// (wp.Moby-Dick, wp.Herman_Melville)
 function linkId(book) {
     if (book.source === 'gutenberg') {
         return `pg${book.id}`;
+    }
+    if (book.source === 'wikipedia') {
+        return `wp.${book.id.replaceAll(' ', '_')}`;
     }
     return `se.${book.id.replace(/^\/ebooks\//, '').replaceAll('/', '.')}`;
 }
@@ -171,6 +176,10 @@ function linkBook(id) {
     const gutenbergMatch = /^pg(\d+)$/.exec(id);
     if (gutenbergMatch !== null) {
         return {'source': 'gutenberg', 'id': gutenbergMatch[1]};
+    }
+    const wikipediaMatch = /^wp\.(.+)$/.exec(id);
+    if (wikipediaMatch !== null) {
+        return {'source': 'wikipedia', 'id': wikipediaMatch[1].replaceAll('_', ' ')};
     }
     const seMatch = /^se\.([a-z0-9_-]+(?:\.[a-z0-9_-]+)+)$/.exec(id);
     return seMatch === null ? null : {'source': 'standardebooks', 'id': `/ebooks/${seMatch[1].replaceAll('.', '/')}`};
@@ -244,7 +253,9 @@ async function openLink(hash) {
     const section = /^[1-9]\d*$/.test(params.section ?? '') ? Number(params.section) : null;
     const saved = state.books[bookKey(linked)];
     let book = saved;
-    if (book === undefined) {
+    if (book === undefined && linked.source === 'wikipedia') {
+        book = articleBook({'title': linked.id});
+    } else if (book === undefined) {
         book = findBook(await catalogPromise.catch(() => ({'books': []})), linked.source, linked.id);
     }
     if (book === null) {
@@ -396,13 +407,16 @@ async function openBook(book, {play = false, show = true, section = null} = {}) 
     renderAll();
     const opening = current;
     try {
-        // The book's default voice - the catalog's (a cached book plays without the catalog)
-        const catalogEntry = findBook(await catalogPromise.catch(() => ({'books': []})), book.source, book.id);
+        // The book's default voice - the catalog's (a cached book plays without the catalog); a Wikipedia article's,
+        // the articles' narrator (Wikipedia's articles aren't in the catalog - the article is its own entry)
+        const isArticle = book.source === 'wikipedia';
+        const catalogEntry = isArticle ? {'voice': articleVoice} :
+            findBook(await catalogPromise.catch(() => ({'books': []})), book.source, book.id);
         opening.defaultVoice = voiceChoices.some(({value}) => value === catalogEntry?.voice) ? catalogEntry.voice : fallbackVoice;
         let prepared = await getCachedBook(key);
         if (prepared === null) {
             const loader = loaders[book.source];
-            const entry = findBook(await catalogPromise, book.source, book.id);
+            const entry = isArticle ? articleBook({'title': book.id}) : findBook(await catalogPromise, book.source, book.id);
             if (loader === undefined || entry === null) {
                 throw new Error('This book is no longer in the catalog.');
             }
@@ -568,7 +582,7 @@ function renderPlayer() {
         playerCover.dataset.key = current.key;
         playerCover.replaceChildren(...coverElement(book).childNodes);
         bookTitle.textContent = book.title;
-        bookAuthor.textContent = book.author;
+        bookAuthor.textContent = book.source === 'wikipedia' ? 'From Wikipedia, the free encyclopedia (CC BY-SA)' : book.author;
         document.title = `${book.title} - PicoShelf`;
     }
     const engineState = engine.state();
@@ -686,7 +700,7 @@ function bookRow(book, {progress = false, removable = false} = {}) {
     open.type = 'button';
     const text = make('div', 'book-text');
     text.append(make('div', 'book-title', book.title));
-    const meta = [book.author];
+    const meta = [book.source === 'wikipedia' ? book.description || 'Wikipedia' : book.author];
     const saved = state.books[bookKey(book)];
     if (progress && saved !== undefined) {
         meta.push(saved.percent >= 99.5 ? 'Finished' : `${Math.floor(saved.percent || 0)}%`);
@@ -795,9 +809,14 @@ function renderTabs() {
             return tab;
         }));
     };
-    tabs(scopeTabs, [['library', 'Library'], ['mine', 'My Library']], state.scope, (scope) => {
+    tabs(scopeTabs, [['library', 'Library'], ['wikipedia', 'Wikipedia'], ['mine', 'My Library']], state.scope, (scope) => {
         state.scope = scope;
     });
+    // Wikipedia's articles have no authors or genres - its shelf is a list
+    viewTabs.hidden = state.scope === 'wikipedia';
+    const placeholder = state.scope === 'wikipedia' ? 'Search Wikipedia' : 'Search titles and authors';
+    searchInput.placeholder = placeholder;
+    searchInput.setAttribute('aria-label', placeholder);
     tabs(viewTabs, [['all', 'All'], ['authors', 'Authors'], ['genres', 'Genres']], state.libraryView, (view) => {
         state.libraryView = view;
     });
@@ -817,6 +836,10 @@ function scopeBooks() {
 
 // Browse the scope's books - all, or a search's matches; page 1 replaces the list, later pages (the all view's) extend it
 function browse(query, page) {
+    if (state.scope === 'wikipedia') {
+        browseWikipedia(query, page);
+        return;
+    }
     browseState.query = query;
     browseState.page = page;
     browseState.books = matchBooks(scopeBooks(), query);
@@ -824,12 +847,61 @@ function browse(query, page) {
 }
 
 
+// Browse Wikipedia - today's articles (no query - fetched once a session), or a search's results, More its next page -
+// live; a newer browse supersedes one still loading
+let wikipediaRequest = 0;
+let todaysPromise = null;
+async function browseWikipedia(query, page) {
+    const request = ++wikipediaRequest;
+    const isCurrent = () => request === wikipediaRequest && state.scope === 'wikipedia';
+    browseState.query = query;
+    browseState.page = page;
+    browseState.error = null;
+    browseState.loading = true;
+    if (page === 1) {
+        browseState.books = [];
+        browseState.next = null;
+    }
+    renderResults();
+    try {
+        if (query === '') {
+            todaysPromise ??= todaysArticles().catch((error) => {
+                todaysPromise = null;
+                throw error;
+            });
+            const books = await todaysPromise;
+            if (isCurrent()) {
+                browseState.books = books;
+            }
+        } else {
+            const result = await searchArticles(query, page === 1 ? 0 : browseState.next ?? 0, pageSize);
+            if (isCurrent()) {
+                browseState.books = page === 1 ? result.books : [...browseState.books, ...result.books];
+                browseState.next = result.next;
+            }
+        }
+    } catch (error) {
+        if (isCurrent()) {
+            browseState.error = error.message || String(error);
+        }
+    }
+    if (isCurrent()) {
+        browseState.loading = false;
+        renderResults();
+    }
+}
+
+
 // The books shown at once (and per More)
 const pageSize = 24;
 
 
-// Render the books - a list (all), or groups by author or genre
+// Render the books - a list (all), or groups by author or genre; Wikipedia's articles, a list
 function renderResults() {
+    if (state.scope === 'wikipedia') {
+        renderArticles();
+        return;
+    }
     const mine = state.scope === 'mine';
     const {books, query} = browseState;
     const row = (book) => bookRow(book, {'progress': book.percent !== undefined || bookKey(book) in state.books, 'removable': mine});
@@ -871,6 +943,29 @@ function renderResults() {
     }
     resultsStatus.textContent = status;
     resultsStatus.classList.toggle('error', browseState.error !== null && !mine);
+}
+
+
+// Render the Wikipedia shelf - today's articles, or a search's (with More while there are more)
+function renderArticles() {
+    const {books, query, loading, error} = browseState;
+    const list = make('ul', 'book-list');
+    list.append(...books.map((book) => bookRow(book, {'progress': bookKey(book) in state.books})));
+    results.replaceChildren(list);
+    moreButton.hidden = loading || query === '' || browseState.next === null || browseState.next === undefined;
+    sourceNote.textContent = query === '' ? 'Today on Wikipedia - the featured article and the most read. Search for any ' +
+        'article: it\'s read aloud from Wikipedia, the free encyclopedia (CC BY-SA).' :
+        'Articles from Wikipedia, the free encyclopedia (CC BY-SA).';
+    let status = '';
+    if (error !== null) {
+        status = error;
+    } else if (loading) {
+        status = 'Loading from Wikipedia...';
+    } else if (books.length === 0) {
+        status = query === '' ? 'No articles today.' : `No articles match "${query}".`;
+    }
+    resultsStatus.textContent = status;
+    resultsStatus.classList.toggle('error', error !== null);
 }
 
 
@@ -1342,7 +1437,8 @@ searchForm.addEventListener('submit', (event) => {
 let searchTimer = null;
 searchInput.addEventListener('input', () => {
     clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => browse(searchInput.value.trim(), 1), 150);
+    // (Wikipedia's search is a request a query - it waits for a pause in the typing)
+    searchTimer = setTimeout(() => browse(searchInput.value.trim(), 1), state.scope === 'wikipedia' ? 500 : 150);
 });
 moreButton.addEventListener('click', () => browse(browseState.query, browseState.page + 1));
 document.addEventListener('keydown', (event) => {
