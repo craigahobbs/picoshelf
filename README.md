@@ -32,7 +32,8 @@ chapter - or at the listener's place, if that is in the section.
   synthesizer, at once on two cores
 - `sources/` - the book sources (Project Gutenberg, Standard Ebooks) and the Wikipedia shelf (`wikipedia.js` - live, from
   Wikipedia's CORS-enabled APIs: today's featured and most-read articles, search, and an article's plain text, its
-  sections the chapters; CC BY-SA, credited on each article)
+  sections the chapters, read by default by Helen - the best-measured voice on encyclopedia prose; CC BY-SA, credited on
+  each article)
 - `lib/` - the catalog and book-format code (catalog search, Gutenberg text cleanup, EPUB and ZIP reading)
 - `data/catalog.json` - the book catalog, each book with its narrator's voice and its genres (`make catalog`)
 - `tools/` - the catalog builder (`catalog.js` - every Standard Ebooks book and the most-downloaded Project Gutenberg
