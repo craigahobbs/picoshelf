@@ -5,24 +5,15 @@
 
 import {defaultSampleRate, defaultStyle, defaultVoice, modelLoader, styleTable, textBlocks, voiceTable} from './synthesis.js';
 import {encodeWav} from './wav.js';
-import {loadStyleModel} from './style.js';
+import {styleLoader} from './style.js';
 
 
 // The models - loaded on first use, once
 const loadModel = modelLoader(() => import('./models/g2pModel.js'), () => import('./models/voiceModel.js'));
 
 
-// The style network (style "auto") - loaded on first use
-let styleLoading = null;
-function loadStyle() {
-    if (styleLoading === null) {
-        styleLoading = import('./models/styleModel.js').then((module) => loadStyleModel(module));
-        styleLoading.catch(() => {
-            styleLoading = null;
-        });
-    }
-    return styleLoading;
-}
+// The style network (style "auto") - loaded on first use, once
+const loadStyle = styleLoader(() => import('./models/styleModel.js'));
 
 
 // The speaking rate range, the default noise seed (the first sentence's - PicoShelf's), and the sample rate range (Hz)

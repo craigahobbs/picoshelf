@@ -1252,8 +1252,8 @@ function renderSettings() {
         engine.setVoice(narrator());
         renderSettings();
     });
-    expressive.append(make('p', 'muted', 'The dialogue\'s angry, shouted, and frightened lines are voiced so, ' +
-        'the narration plain.'));
+    expressive.append(make('p', 'muted', 'Dialogue is read a little livelier than the narration, and each paragraph ' +
+        'shaped as a narrator reads it.'));
     sheetBody.replaceChildren(
         voiceSetting(),
         choice('Speed', speeds.map((speed) => [speed, `${speed}×`]), rate, (value) => apply({'rate': value})),

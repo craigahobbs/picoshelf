@@ -256,7 +256,7 @@ export function spanFrames(model, spans, {voice, speaker, rate = 1, beat = noBea
                 yield Array.from({'length': silentCount}, () => Float64Array.from(silent));
             }
             for (const chunk of stream.chunks) {
-                last = chunk[chunk.length - 1] ?? last;
+                last = chunk[chunk.length - 1];
                 yield chunk;
             }
         }

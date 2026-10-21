@@ -7,7 +7,13 @@ export const styleModel = {
     'version': 2,
     'config': {'buckets': 4096, 'dim': 16, 'hidden': 32},
     'thresholds': {'angry': 1.01, 'shouting': 1.01, 'fearful': 1.01},
-    'scales': {'embedding': 0.0525903476504829, 'hidden': 0.022999900532519723, 'hiddenBias': 0.009736609271192175, 'output': 0.00227688968650938, 'outputBias': 0.006107304509230486},
+    'scales': {
+        'embedding': 0.0525903476504829,
+        'hidden': 0.022999900532519723,
+        'hiddenBias': 0.009736609271192175,
+        'output': 0.00227688968650938,
+        'outputBias': 0.006107304509230486
+    },
     'weights': `
 6/T42vnj/gkB+vgN+AYQEvT8+/sK6BArFeLl4ebk+Rwl9OgKDQn57O4J5ewsARHr8eoWHR8f9QroLd73Jhe5wADy//P3AiYI+QHy3PbyEOb1/+cM8AwA9/v+
 5wH3+/oSCg3r/xQD3wIDEPPq3wDW2AgWD/jx8g0FWOsVCt0MCA0M5P8bAOoNC+Tm+fsAAxHv8NUHIB4JA9z0F/MCIBLoHRf33wQCARER/R4MyfHz8O8LMP4D

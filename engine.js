@@ -65,7 +65,7 @@ export class Engine {
         import('./picovox/lib/models/styleModel.js').then((module) => {
             this.styleModel = loadStyleModel(module);
         }, () => {
-            // No style network - the dialogue reads neutral
+            // No style network - the quotations read as the narration does (the paragraph beats still apply)
         }).finally(() => {
             this.styleSettled = true;
             if (this.session !== null && this.session.expressive && this.session.units.length !== 0) {

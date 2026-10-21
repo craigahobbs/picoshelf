@@ -94,6 +94,22 @@ export function loadStyleModel(module) {
 }
 
 
+// The style network's loader - a function returning a promise of loadStyleModel's model, its module imported on first
+// use, once (a failed import is tried again on the next call)
+export function styleLoader(importModule) {
+    let loading = null;
+    return () => {
+        if (loading === null) {
+            loading = importModule().then((module) => loadStyleModel(module));
+            loading.catch(() => {
+                loading = null;
+            });
+        }
+        return loading;
+    };
+}
+
+
 // A quotation's style probabilities - {quotation text, before, after, previous, next} - by styleClasses
 export function styleProbabilities(model, quotation) {
     const {config, weights} = model;
