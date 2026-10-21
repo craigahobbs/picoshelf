@@ -8,8 +8,10 @@ const apiUrl = 'https://en.wikipedia.org/w/api.php';
 const feedUrl = 'https://en.wikipedia.org/api/rest_v1/feed/featured';
 const requestHeaders = {'Api-User-Agent': 'PicoShelf (https://craigahobbs.github.io/picoshelf/)'};
 
-// An article's narrator by default - Kate, PicoVox's brisk, clear voice for facts and arguments
-export const articleVoice = 'kate';
+// An article's narrator by default - PicoVox's best voice on encyclopedia prose, measured: Helen scores the highest UTMOS
+// of the twelve voices on twelve Wikipedia articles' openings (4.35; the median voice 4.20) and on the listener panel's
+// texts (4.30), her word error rate no worse than the median voice's (2026-10-21, two noise seeds)
+export const articleVoice = 'helen';
 
 // The sections not read - an article's apparatus
 const skippedSections = new Set([
