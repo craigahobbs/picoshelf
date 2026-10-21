@@ -5,7 +5,9 @@
 // synthesis functions are exported so they also run under Node.
 //
 // Messages in:
-// - {'type': 'units', 'id', 'units': [{'index', 'text', 'paragraphStart'}], 'voice', 'rate'} speaks the units in order,
+// - {'type': 'units', 'id', 'units': [{'index', 'text', 'paragraphStart', 'spans', 'beat'}], 'voice', 'rate'} speaks the units in order
+//   (a unit with spans - [{text, style}], expressive dialogue - its spans in their styles; with a beat - its paragraph's
+//   arc, picovox/lib/style.js paragraphBeats - the beat's pitch, level, and pace),
 //   posting {'type': 'unitStart', 'id', 'unit'}, {'type': 'unitBlock', 'id', 'unit', 'samples', 'sampleRate'}, and
 //   {'type': 'unitDone', 'id', 'unit'} for each, then {'type': 'runDone', 'id'}. A newer run or a cancel supersedes a run between units.
 // - {'type': 'models', 'g2pModel', 'voiceModel': {'manifest', 'encoding', 'weights'}} - the generated model modules
@@ -21,7 +23,7 @@
 // and a unit is spoken by PicoVox's synthesis pipeline (picovox/lib/synthesis.js) - picovox/ is a copy of the npm
 // package picovox's lib/ (make picovox).
 
-import {paragraphPause, sentenceBlocks, sentenceFrames, sentencePause} from './picovox/lib/synthesis.js';
+import {paragraphPause, sentenceBlocks, sentenceFrames, sentencePause, spanFrames} from './picovox/lib/synthesis.js';
 import {setPronouncer, textToPhrases} from './picovox/lib/lexicon.js';
 import {loadG2p} from './picovox/lib/g2p.js';
 import {loadPackagedModel} from './picovox/lib/package.js';
@@ -153,8 +155,9 @@ if (typeof globalThis.WorkerGlobalScope !== 'undefined' && self instanceof globa
                 release();
                 return;
             }
+            const spans = JSON.stringify([unit.spans ?? null, unit.beat ?? null]);
             if (index === 0 && finished !== null && finished.run === run - 1 && finished.unit === unit.index &&
-                finished.voice === voice && finished.rate === rate) {
+                finished.voice === voice && finished.rate === rate && finished.spans === spans) {
                 release();
                 continue;
             }
@@ -164,9 +167,14 @@ if (typeof globalThis.WorkerGlobalScope !== 'undefined' && self instanceof globa
                 self.postMessage({'type': 'unitStart', id, 'unit': unit.index});
                 // Pronounce the unit's words first (cached), to time the G2P apart from the voice network
                 const words = textToPhrases(unit.text).reduce((count, phrase) => count + phrase.words.length, 0);
-                trace(`unit ${unit.index}: G2P ${words} words in ${Math.round(performance.now() - unitStart)} ms`);
+                const styled = (unit.spans ? ` (spans ${unit.spans.map((span) => span.style).join(', ')})` : '') +
+                    (unit.beat ? ` (beat pitch ${unit.beat.transforms[0].pitchScale.toFixed(3)}, rate ${unit.beat.rate})` : '');
+                trace(`unit ${unit.index}: G2P ${words} words in ${Math.round(performance.now() - unitStart)} ms${styled}`);
                 const pause = unit.paragraphStart ? paragraphPause : sentencePause;
-                const {chunks, eq} = sentenceFrames(model, unit.text, {'voice': picovox, rate});
+                // A unit with expressive dialogue is spoken in spans - its quotations' words in their styles
+                const beat = unit.beat ?? undefined;
+                const {chunks, eq} = unit.spans ? spanFrames(model, unit.spans, {'voice': picovox, rate, beat}) :
+                    sentenceFrames(model, unit.text, {'voice': picovox, rate, beat});
                 renderWorker.postMessage({'type': 'begin', id, 'unit': unit.index, eq, 'seed': 1000 + unit.index, pause, rate});
                 let networkMs = 0;
                 let networkStart = performance.now();
@@ -190,7 +198,7 @@ if (typeof globalThis.WorkerGlobalScope !== 'undefined' && self instanceof globa
                 networkMs += performance.now() - networkStart;
                 renderWorker.postMessage({'type': 'end', id, 'unit': unit.index});
                 trace(`unit ${unit.index}: network ${Math.round(networkMs)} ms`);
-                finished = {run, 'unit': unit.index, voice, rate};
+                finished = {run, 'unit': unit.index, voice, rate, spans};
             } finally {
                 release();
             }
