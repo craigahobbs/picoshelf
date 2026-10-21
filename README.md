@@ -2,7 +2,8 @@
 
 **Every public-domain book, read aloud. Right in your browser.**
 
-PicoShelf is an audiobook player for public-domain books (Project Gutenberg and Standard Ebooks). Each book is fetched
+PicoShelf is an audiobook player for public-domain books (Project Gutenberg and Standard Ebooks) and Wikipedia's
+articles. Each book is fetched
 from its source and read aloud by [PicoVox](https://github.com/craigahobbs/picovox)
 ([npm](https://www.npmjs.com/package/picovox)) - realistic speech synthesis in pure JavaScript, under 1 MB - synthesized
 on your device, in a Web Worker. No server, no recorded speech, no runtime dependencies beyond PicoVox.
@@ -16,8 +17,9 @@ A book's address is its link, and it follows the listener's section - share it f
 copy it from the address bar. The link's hash parameters (key=value pairs joined by "&", URL-encoded, as
 [MarkdownUp](https://github.com/craigahobbs/markdown-up)'s) name the book and, optionally, the section:
 
-- `book` - the book's id, stable across catalog builds: `pg` and its Project Gutenberg ebook number (`pg1342`), or
-  `se.` and its Standard Ebooks path with dots for slashes (`se.jane-austen.pride-and-prejudice`)
+- `book` - the book's id, stable across catalog builds: `pg` and its Project Gutenberg ebook number (`pg1342`),
+  `se.` and its Standard Ebooks path with dots for slashes (`se.jane-austen.pride-and-prejudice`), or `wp.` and a
+  Wikipedia article's title as Wikipedia's links write it (`wp.Moby-Dick`, `wp.Herman_Melville`)
 - `section` - the section's number in the book's contents (its sections and subsections in order, from 1)
 
 For example, `#book=se.miguel-de-cervantes-saavedra.don-quixote.john-ormsby&section=12` opens Don Quixote at its fifth
@@ -28,7 +30,9 @@ chapter - or at the listener's place, if that is in the section.
 - `index.html`, `app.js`, `engine.js`, `worker.js`, `renderworker.js`, `store.js`, `bookcache.js` - the app (copied
   from voice-synth's `static/audiobook/`); the synthesis worker runs the voice network and its render worker the
   synthesizer, at once on two cores
-- `sources/` - the book sources (Project Gutenberg, Standard Ebooks)
+- `sources/` - the book sources (Project Gutenberg, Standard Ebooks) and the Wikipedia shelf (`wikipedia.js` - live, from
+  Wikipedia's CORS-enabled APIs: today's featured and most-read articles, search, and an article's plain text, its
+  sections the chapters; CC BY-SA, credited on each article)
 - `lib/` - the catalog and book-format code (catalog search, Gutenberg text cleanup, EPUB and ZIP reading)
 - `data/catalog.json` - the book catalog, each book with its narrator's voice and its genres (`make catalog`)
 - `tools/` - the catalog builder (`catalog.js` - every Standard Ebooks book and the most-downloaded Project Gutenberg
