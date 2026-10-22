@@ -20,10 +20,13 @@ Local Makefile overrides:
 
 Package-specific targets:
 
-- `make app` - the site, `build/app/`: `static/index.html`, `lib/`, `data/catalog.json`, and PicoVox
-  (`node_modules/picovox/lib/` in `picovox/lib/`), the app's bare `picovox/...` imports rewritten to relative ones
+- `make app` - the site, `build/app/`: `static/index.html`, `lib/`, `data/catalog.json`, PicoVox
+  (`node_modules/picovox/lib/` in `picovox/lib/`), the app's bare `picovox/...` imports rewritten to relative ones, and
+  the service worker (`static/sw.js` - a classic script, linted, tested by `test/testServiceWorker.js` - with its
+  version and file list written in)
 - `make run` - `make app`, then serve `build/app/` at http://localhost:8000/
-- `make catalog` - rebuild `data/catalog.json` (`tools/catalog.js`; needs a local Ollama)
+- `make catalog` - rebuild `data/catalog.json` (`tools/catalog.js`; needs a local Ollama - a first build decides
+  every candidate's genre and every book's narrator, hours on the GPU; later builds decide only new books)
 
 ## Code
 

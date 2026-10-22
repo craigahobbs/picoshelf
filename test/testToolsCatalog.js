@@ -1,6 +1,8 @@
-import {cacheDir, resetCache, withSite} from './toolsHelpers.js';
+import {cacheDir, gutenbergFile, resetCache, withSite, writeCache} from './toolsHelpers.js';
 import {existsSync, readFileSync, utimesSync} from 'node:fs';
+import {gunzipSync, gzipSync} from 'node:zlib';
 import test, {mock} from 'node:test';
+import {Buffer} from 'node:buffer';
 import {strict as assert} from 'node:assert';
 import {join} from 'node:path';
 import process from 'node:process';
@@ -8,19 +10,11 @@ import process from 'node:process';
 
 // The tools - imported after toolsHelpers.js sets their cache directory
 const {
-    catalogJSON, collapseSpace, fetchCached, fetchRetry, gitenbergRepositories, gutenbergAuthor, gutenbergDescription,
-    gutenbergSubjects, gutenbergTitle, gutenbergWords, isReferenceWork, log, parseArgs, resolveText, searchRepository, services,
-    surnameKeys, titleCase, titleKey, trimDescription, uniqueSubjects
+    catalogJSON, collapseSpace, fetchCached, fetchFile, fetchRetry, genreQuotas, gitenbergRepositories, gutenbergAuthor,
+    gutenbergDescription, gutenbergSubjects, gutenbergText, gutenbergTitle, isReferenceWork, log, parseArgs, services, surnameKeys,
+    titleCase, titleKey, trimDescription, uniqueSubjects
 } = await import('../tools/catalog.js');
-const {readJSONCache} = await import('../tools/decide.js');
-
-
-// A response with a URL (a fetched response's - a constructed one's is empty)
-function urlResponse(url, body, init) {
-    const response = new Response(body, init);
-    Object.defineProperty(response, 'url', {'value': url});
-    return response;
-}
+const {qualityVersion} = await import('../tools/quality.js');
 
 
 //
@@ -30,9 +24,11 @@ function urlResponse(url, body, init) {
 
 test('parseArgs, defaults', () => {
     const options = parseArgs([]);
-    assert.equal(options.gutenberg, 1000);
+    assert.equal(options.books, 5000);
+    assert.equal(options.gutenberg, 8000);
     assert.equal(options.standardebooks, Infinity);
     assert.equal(options.maxAge, 30);
+    assert.equal(options.pageMaxAge, 365);
     assert.equal(options.cacheOnly, false);
     assert.equal(options.voiceModel, 'kev:9b-nvfp4');
     assert.match(options.output, /data[/\\]catalog\.json$/);
@@ -42,19 +38,24 @@ test('parseArgs, defaults', () => {
 test('parseArgs, arguments', () => {
     assert.deepEqual(
         parseArgs([
-            '--gutenberg', '10', '--standardebooks', '5', '--max-age', '0', '--cache-only', '--voice-model', 'test:1b',
-            '-o', 'out.json'
+            '--books', '100', '--gutenberg', '10', '--standardebooks', '5', '--max-age', '0', '--page-max-age', '7', '--cache-only',
+            '--voice-model', 'test:1b', '-o', 'out.json'
         ]),
-        {'gutenberg': 10, 'standardebooks': 5, 'maxAge': 0, 'cacheOnly': true, 'output': 'out.json', 'voiceModel': 'test:1b'}
+        {
+            'books': 100, 'gutenberg': 10, 'standardebooks': 5, 'maxAge': 0, 'pageMaxAge': 7, 'cacheOnly': true, 'output': 'out.json',
+            'voiceModel': 'test:1b'
+        }
     );
 });
 
 
 test('parseArgs, errors', () => {
     assert.throws(() => parseArgs(['--bogus']), {'message': 'Unknown argument "--bogus"'});
+    assert.throws(() => parseArgs(['--books', 'all']), {'message': 'Invalid books "NaN"'});
     assert.throws(() => parseArgs(['--gutenberg', 'many']), {'message': 'Invalid gutenberg "NaN"'});
     assert.throws(() => parseArgs(['--standardebooks', '-1']), {'message': 'Invalid standardebooks "-1"'});
     assert.throws(() => parseArgs(['--max-age']), {'message': 'Invalid maxAge "NaN"'});
+    assert.throws(() => parseArgs(['--page-max-age', '-2']), {'message': 'Invalid pageMaxAge "-2"'});
 });
 
 
@@ -214,13 +215,6 @@ test('gutenbergSubjects', () => {
 });
 
 
-test('gutenbergWords', () => {
-    assert.equal(gutenbergWords(598000), 100000);
-    assert.equal(gutenbergWords(18100), 100);
-    assert.equal(gutenbergWords(0), null);
-});
-
-
 test('isReferenceWork', () => {
     assert.equal(isReferenceWork({'title': 'A Dictionary of the English Language', 'subjects': []}), true);
     assert.equal(isReferenceWork({'title': 'The Encyclopaedia Britannica', 'subjects': []}), true);
@@ -278,11 +272,13 @@ test('fetchRetry, throttle', async () => {
         await fetchRetry('https://throttle.test/1');
         await fetchRetry('https://throttle.test/2');
 
-        // Standard Ebooks - 500 ms apart; Gutendex - a second apart
-        await fetchRetry('https://gutendex.com/books/?page=1');
-        await fetchRetry('https://gutendex.com/books/?page=2');
+        // Gutenberg - a second apart; GitHub's raw files - 100 ms apart
+        await fetchRetry('https://www.gutenberg.org/cache/epub/feeds/rdf-files.tar.bz2');
+        await fetchRetry('https://www.gutenberg.org/cache/epub/feeds/rdf-files.tar.bz2');
+        await fetchRetry('https://raw.githubusercontent.com/GITenberg/Book_1/master/1-0.txt');
+        await fetchRetry('https://raw.githubusercontent.com/GITenberg/Book_2/master/2-0.txt');
     });
-    assert.deepEqual(sleeps, [500, 1000]);
+    assert.deepEqual(sleeps, [500, 1000, 100]);
 });
 
 
@@ -383,6 +379,47 @@ test('fetchCached, error', async () => {
 });
 
 
+test('fetchFile', async () => {
+    resetCache();
+    const url = 'https://file.test/archive.tar.bz2';
+    const path = join(cacheDir, 'site', 'archive.tar.bz2');
+    const bodies = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])];
+    const results = [];
+    const {calls} = await withSite(() => new Response(bodies.shift()), async () => {
+        // Fetched, then cached
+        results.push(await fetchFile(url, 'site/archive.tar.bz2', {'maxAge': 30, 'cacheOnly': false}, 1000));
+        results.push([...readFileSync(path)]);
+        results.push(await fetchFile(url, 'site/archive.tar.bz2', {'maxAge': 30, 'cacheOnly': false}));
+
+        // Too old - refetched
+        results.push(await fetchFile(url, 'site/archive.tar.bz2', {'maxAge': 0, 'cacheOnly': false}));
+        results.push([...readFileSync(path)]);
+
+        // Old but cache-only
+        utimesSync(path, 0, 0);
+        results.push(await fetchFile(url, 'site/archive.tar.bz2', {'maxAge': 30, 'cacheOnly': true}));
+
+        // Uncached and cache-only
+        results.push(await fetchFile(url, 'site/other.tar.bz2', {'maxAge': 30, 'cacheOnly': true}));
+    });
+    assert.deepEqual(results, [path, [1, 2, 3], path, path, [4, 5], path, null]);
+    assert.deepEqual(calls.map(([callURL]) => callURL), [url, url]);
+    assert.equal(existsSync(`${path}.tmp`), false);
+});
+
+
+test('fetchFile, error', async () => {
+    resetCache();
+    await withSite(() => new Response('Not Found', {'status': 404}), async () => {
+        await assert.rejects(
+            fetchFile('https://file.test/missing', 'site/missing.tar.bz2', {'maxAge': 30, 'cacheOnly': false}),
+            {'message': 'https://file.test/missing: error 404'}
+        );
+    });
+    assert.equal(existsSync(join(cacheDir, 'site')), false);
+});
+
+
 //
 // GITenberg
 //
@@ -409,122 +446,143 @@ test('gitenbergRepositories', async () => {
 });
 
 
-// Set or delete (undefined) the GitHub token
-function setToken(token) {
-    if (token === undefined) {
-        delete process.env.GITHUB_TOKEN;
-    } else {
-        process.env.GITHUB_TOKEN = token;
-    }
-}
 
-
-test('searchRepository', async () => {
+test('gutenbergText', async () => {
     resetCache();
-    const {GITHUB_TOKEN} = process.env;
-    setToken(undefined);
-    const searchCache = new Map([['5', 'Cached_5']]);
-    const results = [];
-    const resetHeader = () => String(Date.now() / 1000 + 30);
-    const responses = [
-        // Found, with searches left
-        () => new Response(JSON.stringify({'items': [{'name': 'Other_1100'}, {'name': 'Book_100'}]}), {
-            'headers': {'X-RateLimit-Remaining': '9'}
-        }),
-        // Not found - the limit exhausted, its reset past
-        () => new Response(JSON.stringify({'items': [{'name': 'Book_1010'}]}), {
-            'headers': {'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': '1000'}
-        })
-    ];
-    let {calls, sleeps, output} = await withSite(() => responses.shift()(), async () => {
-        results.push(await searchRepository('5', searchCache));
-        results.push(await searchRepository('100', searchCache));
-        results.push(await searchRepository('101', searchCache));
-    });
-    assert.deepEqual(results, ['Cached_5', 'Book_100', null]);
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0][0], 'https://api.github.com/search/repositories?q=_100+in%3Aname+org%3AGITenberg&per_page=100');
-    assert.deepEqual(calls[0][1].headers, {'User-Agent': calls[0][1].headers['User-Agent'], 'Accept': 'application/vnd.github+json'});
-    assert.deepEqual(sleeps, [1000]);
-    assert.deepEqual(output, []);
-    assert.deepEqual(readJSONCache('gitenberg/search.json'), {'5': 'Cached_5', '100': 'Book_100', '101': null});
-
-    // Rate limited (a reset time, a reset time past, no reset time), then the limit exhausted
-    setToken('token');
-    responses.push(
-        () => new Response('Limited', {'status': 403, 'headers': {'X-RateLimit-Reset': resetHeader()}}),
-        () => new Response(null, {'status': 403, 'headers': {'X-RateLimit-Reset': '1000'}}),
-        () => new Response(null, {'status': 403}),
-        () => new Response(JSON.stringify({'items': [{'name': 'Book_102'}]}), {
-            'headers': {'X-RateLimit-Remaining': '0', 'X-RateLimit-Reset': resetHeader()}
-        })
-    );
-    try {
-        ({calls, sleeps, output} = await withSite(() => responses.shift()(), async () => {
-            results.push(await searchRepository('102', searchCache));
-        }));
-    } finally {
-        setToken(GITHUB_TOKEN);
-    }
-    assert.equal(results[3], 'Book_102');
-    assert.equal(calls.length, 4);
-    assert.equal(calls[0][1].headers.Authorization, 'Bearer token');
-    assert.deepEqual(sleeps, [31000, 1000, 61000, 31000]);
-    assert.deepEqual(output, [
-        '  GitHub search rate limit - waiting 31 s',
-        '  GitHub search rate limit - waiting 1 s',
-        '  GitHub search rate limit - waiting 61 s',
-        '  GitHub search rate limit - waiting 31 s'
-    ]);
-    assert.deepEqual(readJSONCache('gitenberg/search.json'), {'5': 'Cached_5', '100': 'Book_100', '101': null, '102': 'Book_102'});
-});
-
-
-test('searchRepository, error', async () => {
-    resetCache();
-    await withSite(() => new Response('{}', {'status': 422}), async () => {
-        await assert.rejects(searchRepository('7', new Map()), {'message': 'GitHub search: error 422'});
-    });
-});
-
-
-test('resolveText', async () => {
     const base = 'https://raw.githubusercontent.com/GITenberg/';
     const site = {
-        // The UTF-8 file, redirected
-        [`${base}Book_1/master/1-0.txt`]: () => urlResponse('https://example.com/1-0.txt', null, {'headers': {'Content-Length': '598000'}}),
+        // The UTF-8 file
+        [`${base}Book_1/master/1-0.txt`]: () => new Response(gutenbergFile('Café — crème.')),
 
         // The plain file - UTF-8, and Windows-1252
-        [`${base}Book_2/master/2.txt`]: (options) => new Response(options.method === 'HEAD' ? null : 'Café'),
-        [`${base}Book_3/master/3.txt`]: (options) => new Response(
-            options.method === 'HEAD' ? null : new Uint8Array([0x43, 0x61, 0x66, 0xe9])
-        ),
+        [`${base}Book_2/master/2.txt`]: () => new Response(gutenbergFile('Café — crème.')),
+        [`${base}Book_3/master/3.txt`]: () => new Response(Buffer.from(gutenbergFile('Café crème.'), 'latin1')),
 
         // The Latin-1 file
-        [`${base}Book_4/master/4-8.txt`]: () => new Response(null, {'headers': {'Content-Length': '1000'}}),
+        [`${base}Book_4/master/4-8.txt`]: () => new Response(gutenbergFile()),
+
+        // A text that fails the quality rules
+        [`${base}Book_6/master/6-0.txt`]: () => new Response(
+            gutenbergFile('[See the note.] '.repeat(20).trim(), 'A ~tilde~ word. '.repeat(10).trim())
+        ),
+        [`${base}Book_7/master/7-0.txt`]: () => new Response('A short text.'),
 
         // An error
-        [`${base}Book_6/master/6-0.txt`]: () => new Response(null, {'status': 403})
+        [`${base}Book_8/master/8-0.txt`]: () => new Response('Forbidden', {'status': 403})
+    };
+    const book = (id) => ({'id': String(id), 'title': 'A Book', 'author': 'An Author'});
+    const options = {'maxAge': 30, 'cacheOnly': false};
+    const textCache = {};
+    const results = [];
+    const {calls} = await withSite(site, async () => {
+        for (const id of [1, 2, 3, 4, 5, 6, 7]) {
+            results.push(await gutenbergText(book(id), `Book_${id}`, textCache, options));
+        }
+        await assert.rejects(gutenbergText(book(8), 'Book_8', textCache, options), {'message': `${base}Book_8/master/8-0.txt: error 403`});
+    });
+    const text = (file, encoding, words, reason = null) => ({'version': qualityVersion, file, encoding, words, reason});
+    assert.deepEqual(results, [
+        text('1-0.txt', 'utf-8', 743),
+        text('2.txt', 'utf-8', 743),
+        text('3.txt', 'windows-1252', 742),
+        text('4-8.txt', 'windows-1252', 740),
+        text(null, null, 0, 'no text file'),
+        text('6-0.txt', 'utf-8', 830, 'notes, marks'),
+        text('7-0.txt', 'utf-8', 8, 'too short')
+    ]);
+    assert.deepEqual(textCache, {
+        '1': results[0], '2': results[1], '3': results[2], '4': results[3], '5': results[4], '6': results[5], '7': results[6]
+    });
+    assert.deepEqual(calls.map(([url]) => url.slice(base.length)), [
+        'Book_1/master/1-0.txt',
+        'Book_2/master/2-0.txt', 'Book_2/master/2.txt',
+        'Book_3/master/3-0.txt', 'Book_3/master/3.txt',
+        'Book_4/master/4-0.txt', 'Book_4/master/4.txt', 'Book_4/master/4-8.txt',
+        'Book_5/master/5-0.txt', 'Book_5/master/5.txt', 'Book_5/master/5-8.txt',
+        'Book_6/master/6-0.txt',
+        'Book_7/master/7-0.txt',
+        'Book_8/master/8-0.txt'
+    ]);
+
+    // The texts are cached, gzipped
+    const textPath = (id) => join(cacheDir, 'gitenberg', 'texts', `${id}.txt.gz`);
+    assert.equal(gunzipSync(readFileSync(textPath(1))).toString('utf-8'), gutenbergFile('Café — crème.'));
+    assert.equal(gunzipSync(readFileSync(textPath(3))).toString('latin1'), gutenbergFile('Café crème.'));
+    assert.equal(existsSync(textPath(5)), false);
+    assert.equal(existsSync(textPath(8)), false);
+});
+
+
+test('gutenbergText, cached', async () => {
+    resetCache();
+    const base = 'https://raw.githubusercontent.com/GITenberg/';
+    const book = (id) => ({'id': String(id), 'title': 'A Book', 'author': 'An Author'});
+    const old = qualityVersion - 1;
+    writeCache('gitenberg/texts/2.txt.gz', gzipSync(Buffer.from(gutenbergFile('Café crème.'), 'latin1')));
+    writeCache('gitenberg/texts/3.txt.gz', gzipSync(Buffer.from('A short text.')));
+    const textCache = {
+        // Measured with these rules
+        '1': {'version': qualityVersion, 'file': '1-0.txt', 'encoding': 'utf-8', 'words': 1234, 'reason': null},
+
+        // Measured with older rules - the cached text measured again (the plain file, Windows-1252)
+        '2': {'version': old, 'file': '2.txt', 'encoding': 'utf-8', 'words': 0, 'reason': 'old'},
+
+        // Measured with older rules, cached as "no text file" - downloaded again
+        '4': {'version': old, 'file': null, 'encoding': null, 'words': 0, 'reason': 'no text file'},
+
+        // Measured with older rules, its text not cached - downloaded again
+        '5': {'version': old, 'file': '5-0.txt', 'encoding': 'utf-8', 'words': 0, 'reason': null}
+    };
+    const site = {
+        [`${base}Book_4/master/4-0.txt`]: () => new Response(gutenbergFile()),
+        [`${base}Book_5/master/5.txt`]: () => new Response(gutenbergFile())
     };
     const results = [];
-    const {calls} = await withSite((url, options) => site[url]?.(options) ?? new Response(null, {'status': 404}), async () => {
-        for (const id of ['1', '2', '3', '4', '5']) {
-            results.push(await resolveText(id, `Book_${id}`));
+    let {calls} = await withSite(site, async () => {
+        for (const id of [1, 2, 4, 5]) {
+            results.push(await gutenbergText(book(id), `Book_${id}`, textCache, {'maxAge': 30, 'cacheOnly': false}));
         }
-        await assert.rejects(resolveText('6', 'Book_6'), {'message': `${base}Book_6/master/6-0.txt: error 403`});
     });
+    const text = (file, encoding, words, reason = null) => ({'version': qualityVersion, file, encoding, words, reason});
     assert.deepEqual(results, [
-        {'url': 'https://example.com/1-0.txt', 'encoding': 'utf-8', 'bytes': 598000},
-        {'url': `${base}Book_2/master/2.txt`, 'encoding': 'utf-8', 'bytes': 0},
-        {'url': `${base}Book_3/master/3.txt`, 'encoding': 'windows-1252', 'bytes': 0},
-        {'url': `${base}Book_4/master/4-8.txt`, 'encoding': 'windows-1252', 'bytes': 1000},
-        null
+        text('1-0.txt', 'utf-8', 1234),
+        text('2.txt', 'windows-1252', 742),
+        text('4-0.txt', 'utf-8', 740),
+        text('5.txt', 'utf-8', 740)
     ]);
-    assert.deepEqual(calls.slice(0, 3).map(([url, options]) => [url, options.method, options.headers['Accept-Encoding']]), [
-        [`${base}Book_1/master/1-0.txt`, 'HEAD', 'identity'],
-        [`${base}Book_2/master/2-0.txt`, 'HEAD', 'identity'],
-        [`${base}Book_2/master/2.txt`, 'HEAD', 'identity']
+    assert.deepEqual(calls.map(([url]) => url.slice(base.length)), [
+        'Book_4/master/4-0.txt', 'Book_5/master/5-0.txt', 'Book_5/master/5.txt'
     ]);
-    assert.equal(calls[3][1].method, 'GET');
-    assert.equal(calls.length, 14);
+
+    // Cache-only - an uncached text isn't downloaded, a cached text is measured again
+    textCache['3'] = {'version': old, 'file': '3-0.txt', 'encoding': 'utf-8', 'words': 0, 'reason': null};
+    results.length = 0;
+    ({calls} = await withSite({}, async () => {
+        for (const id of [3, 6]) {
+            results.push(await gutenbergText(book(id), `Book_${id}`, textCache, {'maxAge': 30, 'cacheOnly': true}));
+        }
+    }));
+    assert.deepEqual(results, [text('3-0.txt', 'utf-8', 8, 'too short'), null]);
+    assert.deepEqual(calls, []);
+    assert.equal('6' in textCache, false);
+});
+
+
+test('genreQuotas', () => {
+    // By the square root of each genre's weight, at least the floor
+    assert.deepEqual(genreQuotas({'a': 900, 'b': 100, 'c': 0}, {}, 100, 10), {'a': 75, 'b': 25, 'c': 10});
+    assert.deepEqual(genreQuotas({'a': 400, 'b': 100}, {}, 100, 40), {'a': 67, 'b': 40});
+
+    // Rounded
+    assert.deepEqual(genreQuotas({'a': 1, 'b': 1, 'c': 1}, {}, 10, 0), {'a': 3, 'b': 3, 'c': 3});
+
+    // A genre's fixed books - kept when over its share, and the other genres share the rest
+    assert.deepEqual(genreQuotas({'a': 900, 'b': 100}, {'a': 10, 'b': 20}, 100, 10), {'a': 75, 'b': 25});
+    assert.deepEqual(genreQuotas({'a': 900, 'b': 100}, {'b': 40}, 100, 10), {'a': 60, 'b': 40});
+    assert.deepEqual(genreQuotas({'a': 400, 'b': 100, 'c': 100}, {'b': 30, 'c': 24}, 100, 0), {'a': 46, 'b': 30, 'c': 24});
+    assert.deepEqual(genreQuotas({'a': 1}, {'a': 50}, 10, 0), {'a': 50});
+
+    // No weights - the floor; no weight and no floor - none
+    assert.deepEqual(genreQuotas({'a': 0, 'b': 0}, {}, 100, 10), {'a': 10, 'b': 10});
+    assert.deepEqual(genreQuotas({'a': 1, 'b': 0}, {}, 10, 0), {'a': 10, 'b': 0});
 });

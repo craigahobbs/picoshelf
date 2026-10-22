@@ -1,23 +1,32 @@
-import {cacheDir, fakeOllama, jsonResponse, ollamaServer, resetCache, runTool, tempDir, withSite, writeCache} from './toolsHelpers.js';
+import {
+    cacheDir, fakeOllama, gutenbergFile, ollamaServer, rdfRecord, resetCache, runTool, tempDir, withSite, writeArchive, writeCache
+} from './toolsHelpers.js';
 import {existsSync, readFileSync} from 'node:fs';
+import {Buffer} from 'node:buffer';
 import {strict as assert} from 'node:assert';
+import {gzipSync} from 'node:zlib';
 import {join} from 'node:path';
 import process from 'node:process';
+import {setImmediate} from 'node:timers';
 import test from 'node:test';
 
 
 // The tools - imported after toolsHelpers.js sets their cache directory - and the fake Ollama's address
-const {buildCatalog, gutenbergBooks, gutendexBooks, parseHTML, standardEbook, standardEbooks} = await import('../tools/catalog.js');
+const {
+    buildCatalog, chooseGutenberg, gutenbergCandidates, gutenbergRecords, parseHTML, standardEbook, standardEbooks
+} = await import('../tools/catalog.js');
 const {genreNames} = await import('../tools/genres.js');
+const {qualityVersion} = await import('../tools/quality.js');
+const {readJSONCache} = await import('../tools/decide.js');
 process.env.OLLAMA_HOST = 'http://ollama.test';
+
+
+// The genre keys
+const genreKeys = Object.keys(genreNames());
 
 
 // A text response function
 const text = (body) => () => new Response(body);
-
-
-// A JSON response function
-const json = (data) => () => jsonResponse(data);
 
 
 //
@@ -257,32 +266,55 @@ test('standardEbooks, many', async () => {
 //
 
 
-const gutendexURL = (page) => `https://gutendex.com/books/?languages=en&mime_type=text%2Fplain&page=${page}`;
+const gutenbergCatalogURL = 'https://www.gutenberg.org/cache/epub/feeds/rdf-files.tar.bz2';
 const gitenbergListURL = 'https://raw.githubusercontent.com/gitenberg-dev/gitberg/master/gitenberg/data/GITenberg_repo_list.tsv';
 const rawURL = (repository, file) => `https://raw.githubusercontent.com/GITenberg/${repository}/master/${file}`;
-const searchURL = (id) => `https://api.github.com/search/repositories?q=_${id}+in%3Aname+org%3AGITenberg&per_page=100`;
 
 
-// A Gutendex result
-function gutendexResult(id, title, author, more = {}) {
+// A Gutenberg RDF record - an English public-domain text, with a summary, an LCSH subject, a plain text, and a cover
+function gutenbergRDF(id, title, author, downloads, more = {}) {
+    return rdfRecord(id, {
+        title,
+        'creators': [author],
+        'rights': 'Public domain in the USA.',
+        downloads,
+        'summaries': [`"${title}" by ${author} is a book about ${title.toLowerCase()}. (This is an automatically generated summary.)`],
+        'languages': ['en'],
+        'type': 'Text',
+        'subjects': [['LCSH', 'Fiction']],
+        'files': [
+            [`https://www.gutenberg.org/ebooks/${id}.txt.utf-8`, 1000, ['text/plain; charset=utf-8']],
+            [`https://www.gutenberg.org/cache/epub/${id}/pg${id}.cover.medium.jpg`, 100, ['image/jpeg']]
+        ],
+        ...more
+    });
+}
+
+
+// A Gutenberg record (gutenbergRecords's - Gutendex-style)
+function gutenbergRecord(id, title, author, downloads) {
     return {
         id,
         title,
         'authors': [{'name': author}],
-        'summaries': [`"${title}" by ${author} is a book about ${title.toLowerCase()}.`],
         'subjects': ['Fiction'],
         'bookshelves': [],
         'languages': ['en'],
         'copyright': false,
         'media_type': 'Text',
-        'formats': {'image/jpeg': `https://www.gutenberg.org/cache/epub/${id}/pg${id}.cover.medium.jpg`},
-        ...more
+        'formats': {
+            'text/plain; charset=utf-8': `https://www.gutenberg.org/ebooks/${id}.txt.utf-8`,
+            'image/jpeg': `https://www.gutenberg.org/cache/epub/${id}/pg${id}.cover.medium.jpg`
+        },
+        'summaries': [`"${title}" by ${author} is a book about ${title.toLowerCase()}.`],
+        'download_count': downloads,
+        'text_bytes': 1000
     };
 }
 
 
-// A Gutenberg catalog book
-function gutenbergBook(id, title, author, rank, url, more = {}) {
+// A Gutenberg candidate (gutenbergCandidates's)
+function gutenbergCandidate(id, title, author, downloads, more = {}) {
     return {
         'source': 'gutenberg',
         'id': String(id),
@@ -292,159 +324,221 @@ function gutenbergBook(id, title, author, rank, url, more = {}) {
         'subjects': ['Fiction'],
         'language': 'en',
         'cover': `https://www.gutenberg.org/cache/epub/${id}/pg${id}.cover.medium.jpg`,
-        rank,
-        'words': 100000,
-        'text': {url, 'format': 'gutenberg-text', 'encoding': 'utf-8'},
+        downloads,
         ...more
     };
 }
 
 
-test('gutendexBooks', async () => {
+test('gutenbergRecords', async () => {
     resetCache();
-    const site = {
-        [gutendexURL(1)]: json({'next': gutendexURL(2), 'results': [
-            gutendexResult(1, 'One', 'A, B'),
-            gutendexResult(2, 'Two', 'A, B', {'media_type': 'Sound'}),
-            gutendexResult(3, 'Three', 'A, B', {'copyright': true}),
-            gutendexResult(4, 'Four', 'A, B', {'copyright': null})
-        ]}),
-        [gutendexURL(2)]: json({'next': null, 'results': [gutendexResult(5, 'Five', 'A, B')]})
-    };
-    let results;
-    let {calls, output} = await withSite(site, async () => {
-        results = await gutendexBooks({'gutenberg': 10, 'maxAge': 30, 'cacheOnly': false});
+    const archivePath = join(tempDir, 'gutenbergRecords', 'rdf-files.tar.bz2');
+    writeArchive(archivePath, [
+        gutenbergRDF(84, 'Frankenstein', 'Shelley, Mary Wollstonecraft', 100),
+        gutenbergRDF(1342, 'Pride and Prejudice', 'Austen, Jane', 200),
+        gutenbergRDF(11, 'Alice\'s Adventures in Wonderland', 'Carroll, Lewis', 100),
+        gutenbergRDF(5, 'English and French', 'Writer, A', 5, {'languages': ['fr', 'en'], 'rights': 'None'}),
+
+        // Not English public-domain texts
+        gutenbergRDF(6, 'A Recording', 'Writer, A', 1000, {'type': 'Sound'}),
+        gutenbergRDF(7, 'Un Livre', 'Writer, A', 1000, {'languages': ['fr']}),
+        gutenbergRDF(8, 'Copyrighted', 'Writer, A', 1000, {'rights': 'Copyrighted. Read the copyright notice inside this book.'}),
+        gutenbergRDF(9, 'No Plain Text', 'Writer, A', 1000, {
+            'files': [['https://www.gutenberg.org/ebooks/9.epub3.images', 10, ['application/epub+zip']]]
+        })
+    ]);
+    const archive = readFileSync(archivePath);
+    let records;
+    let {calls, output} = await withSite({[gutenbergCatalogURL]: () => new Response(archive)}, async () => {
+        records = await gutenbergRecords({'maxAge': 30, 'cacheOnly': false});
     });
-    assert.deepEqual(results.map((result) => result.id), [1, 4, 5]);
-    assert.deepEqual(calls.map(([url]) => url), [gutendexURL(1), gutendexURL(2)]);
-    assert.deepEqual(output, ['Gutendex: page 1 - 2 books', 'Gutendex: page 2 - 3 books']);
+    assert.deepEqual(records.map((record) => [record.id, record.title, record.download_count]), [
+        [1342, 'Pride and Prejudice', 200],
+        [11, 'Alice\'s Adventures in Wonderland', 100],
+        [84, 'Frankenstein', 100],
+        [5, 'English and French', 5]
+    ]);
+    assert.deepEqual(records[2].authors, [{'name': 'Shelley, Mary Wollstonecraft'}]);
+    assert.equal(records[3].copyright, null);
+    assert.deepEqual(calls.map(([url]) => url), [gutenbergCatalogURL]);
+    assert.deepEqual(output, ['Gutenberg: 4 English texts in its catalog']);
+    assert.deepEqual(readFileSync(join(cacheDir, 'gutenberg', 'rdf-files.tar.bz2')), archive);
 
-    // At most one book
-    ({calls, output} = await withSite({}, async () => {
-        results = await gutendexBooks({'gutenberg': 1, 'maxAge': 30, 'cacheOnly': false});
-    }));
-    assert.deepEqual(results.map((result) => result.id), [1]);
-    assert.deepEqual(calls, []);
-    assert.deepEqual(output, ['Gutendex: page 1 - 1 books']);
-
-    // Not available
+    // Not cached, cache-only
     resetCache();
-    ({output} = await withSite({}, async () => {
-        results = await gutendexBooks({'gutenberg': 10, 'maxAge': 30, 'cacheOnly': false});
+    ({calls, output} = await withSite({}, async () => {
+        records = await gutenbergRecords({'maxAge': 30, 'cacheOnly': true});
     }));
-    assert.deepEqual(results, []);
-    assert.deepEqual(output, []);
+    assert.deepEqual(records, []);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(output, ['Gutenberg: no cached catalog']);
 });
 
 
-test('gutenbergBooks', async () => {
-    resetCache();
-    writeCache('gitenberg/texts.json', JSON.stringify({
-        '11': {
-            'repository': 'Cached_11', 'text': {'url': 'https://example.com/11.txt', 'encoding': 'utf-8', 'bytes': 598000}, 'checked': 0
+test('gutenbergCandidates', async () => {
+    const records = [
+        gutenbergRecord(1001, 'A Dictionary of the English Language', 'Johnson, Samuel', 900),
+        gutenbergRecord(1342, 'Pride and Prejudice', 'Austen, Jane', 800),
+        gutenbergRecord(84, 'Frankenstein; Or, The Modern Prometheus', 'Shelley, Mary Wollstonecraft', 700),
+        gutenbergRecord(41445, 'Frankenstein; or, the modern prometheus', 'Shelley, Mary Wollstonecraft', 600),
+        gutenbergRecord(60000, 'Not in GITenberg', 'Writer, A', 500),
+        {
+            ...gutenbergRecord(11, 'Anonymous', 'Writer, A', 400),
+            'authors': [], 'summaries': [], 'formats': {'text/plain': 'https://www.gutenberg.org/ebooks/11.txt'},
+            'bookshelves': ['Category: Novels']
         },
-        '12': {'repository': null, 'text': null, 'checked': 0},
-        '13': {'repository': null, 'text': null, 'checked': Date.now()}
-    }));
-    const site = {
-        [gutendexURL(1)]: json({'next': null, 'results': [
-            gutendexResult(1001, 'A Dictionary of the English Language', 'Johnson, Samuel'),
-            gutendexResult(1342, 'Pride and Prejudice', 'Austen, Jane'),
-            gutendexResult(84, 'Frankenstein; Or, The Modern Prometheus', 'Shelley, Mary Wollstonecraft'),
-            gutendexResult(41445, 'Frankenstein; or, the modern prometheus', 'Shelley, Mary Wollstonecraft'),
-            gutendexResult(2701, 'Moby Dick; Or, The Whale', 'Melville, Herman'),
-            gutendexResult(60000, 'Unlisted', 'Writer, A'),
-            gutendexResult(3000, 'Not Found', 'Writer, A'),
-            gutendexResult(11, 'Cached', 'Writer, A', {
-                'authors': [], 'summaries': [], 'languages': ['fr', 'de'], 'formats': {}, 'bookshelves': ['Category: Novels']
-            }),
-            gutendexResult(12, 'Stale', 'Writer, A'),
-            gutendexResult(13, 'Recent', 'Writer, A')
-        ]}),
-        [gitenbergListURL]: text('gutenberg_id\trepo_name\n84\tFrankenstein_84\n12\tStale_12\n50000\tLast_50000\n'),
-        [rawURL('Frankenstein_84', '84-0.txt')]: () => new Response(null, {'headers': {'Content-Length': '598000'}}),
-        [rawURL('Moby-Dick_2701', '2701-0.txt')]: () => new Response(null, {'headers': {'Content-Length': '598000'}}),
-        [rawURL('Stale_12', '12-0.txt')]: () => new Response(null, {'headers': {'Content-Length': '598000'}}),
-        [searchURL(2701)]: json({'items': [{'name': 'Moby-Dick_2701'}]}),
-        [searchURL(3000)]: json({'items': []})
-    };
+        gutenbergRecord(2701, 'Moby Dick', 'Melville, Herman', 300),
+        gutenbergRecord(12, 'Past the Candidates', 'Writer, A', 200)
+    ];
+    const repositories = new Map([1001, 1342, 84, 41445, 11, 2701, 12].map((id) => [String(id), `Book_${id}`]));
     const seBooks = [{'title': 'Pride and Prejudice', 'author': 'Jane Austen'}];
-    let books;
-    const {calls, output} = await withSite(site, async () => {
-        books = await gutenbergBooks({'gutenberg': 1000, 'maxAge': 30, 'cacheOnly': false}, seBooks);
+    let candidates;
+    const {output} = await withSite({}, () => {
+        candidates = gutenbergCandidates(records, seBooks, repositories, {'gutenberg': 3});
     });
-    assert.deepEqual(books, [
-        gutenbergBook(84, 'Frankenstein', 'Mary Wollstonecraft Shelley', 1, rawURL('Frankenstein_84', '84-0.txt'), {
+    assert.deepEqual(candidates, [
+        gutenbergCandidate(84, 'Frankenstein', 'Mary Wollstonecraft Shelley', 700, {
             'subtitle': 'Or, The Modern Prometheus',
             'description': 'A book about frankenstein; or, the modern prometheus.'
         }),
-        gutenbergBook(2701, 'Moby Dick', 'Herman Melville', 2, rawURL('Moby-Dick_2701', '2701-0.txt'), {
-            'subtitle': 'Or, The Whale',
-            'description': 'A book about moby dick; or, the whale.'
-        }),
-        gutenbergBook(11, 'Cached', '', 3, 'https://example.com/11.txt', {
-            'description': '', 'subjects': ['Fiction', 'Novels'], 'language': 'fr', 'cover': null
-        }),
-        gutenbergBook(12, 'Stale', 'A Writer', 4, rawURL('Stale_12', '12-0.txt'))
-    ]);
-    assert.deepEqual(calls.map(([url]) => url), [
-        gutendexURL(1),
-        gitenbergListURL,
-        rawURL('Frankenstein_84', '84-0.txt'),
-        searchURL(2701),
-        rawURL('Moby-Dick_2701', '2701-0.txt'),
-        searchURL(3000),
-        rawURL('Stale_12', '12-0.txt')
+        gutenbergCandidate(11, 'Anonymous', '', 400, {'description': '', 'subjects': ['Fiction', 'Novels'], 'cover': null}),
+        gutenbergCandidate(2701, 'Moby Dick', 'Herman Melville', 300)
     ]);
     assert.deepEqual(output, [
-        'Gutendex: page 1 - 10 books',
-        'Gutenberg: 7 candidates (1 Standard Ebooks duplicates, 1 duplicate editions, 1 reference works)',
-        'Gutenberg: 4 books (3 not in GITenberg)'
+        'Gutenberg: 3 candidates (1 not in GITenberg, 1 Standard Ebooks duplicates, 1 duplicate editions, 1 reference works)'
     ]);
-    const textCache = JSON.parse(readFileSync(join(cacheDir, 'gitenberg', 'texts.json'), 'utf-8'));
-    assert.deepEqual(Object.keys(textCache).sort(), ['11', '12', '13', '2701', '3000', '60000', '84']);
-    assert.deepEqual({...textCache['60000'], 'checked': 0}, {'repository': null, 'text': null, 'checked': 0});
-    assert.deepEqual(textCache['2701'].text, {'url': rawURL('Moby-Dick_2701', '2701-0.txt'), 'encoding': 'utf-8', 'bytes': 598000});
+});
+
+
+// The fake Ollama's genres for the books - by "source|id"
+function bookGenreKeys(books, genre) {
+    return Object.fromEntries(books.map((book) => [`${book.source}|${book.id}`, [genre(book), 'adventure']]));
+}
+
+
+test('chooseGutenberg', async () => {
+    resetCache();
+
+    // Two Standard Ebooks books - general fiction
+    const seBooks = [{'source': 'standardebooks', 'id': '/ebooks/a/one'}, {'source': 'standardebooks', 'id': '/ebooks/a/two'}];
+
+    // Thirty general fiction candidates (ids 101-130, 150 downloads each) and fifty mysteries (ids 201-250, 10 downloads
+    // each) - the genres' downloads 9 to 1, so their quotas are 75 and 25 of the catalog's 100 (the mysteries' the floor,
+    // 40), and every other genre's the floor
+    const fiction = Array.from({'length': 30}, (unused, ix) => gutenbergCandidate(101 + ix, `Fiction ${ix + 1}`, 'A Writer', 150));
+    const mysteries = Array.from({'length': 50}, (unused, ix) => gutenbergCandidate(201 + ix, `Mystery ${ix + 1}`, 'A Writer', 10));
+    const candidates = [...fiction, ...mysteries];
+    const genres = bookGenreKeys([...seBooks, ...candidates], (book) => (book.id.startsWith('2') ? 'mystery' : 'fiction'));
+    const repositories = new Map(candidates.map((book) => [book.id, `Book_${book.id}`]));
+
+    // The texts - most pass; general fiction's 103 (notes) and 110 and 120 (too short), and mystery's 205 (notes) and 245
+    // (no text file) fail - and 101's measure is cached
+    writeCache('gitenberg/quality.json', JSON.stringify({
+        '101': {'version': qualityVersion, 'file': '101.txt', 'encoding': 'windows-1252', 'words': 1234, 'reason': null}
+    }));
+    const failing = {
+        '103': gutenbergFile('[See the note.] '.repeat(20).trim()),
+        '110': 'A short text.',
+        '120': 'Another short text.',
+        '205': gutenbergFile('[See the note.] '.repeat(20).trim())
+    };
+    let active = 0;
+    let mostActive = 0;
+    const site = (url) => {
+        const [, id, file] = /\/Book_(\d+)\/master\/(\d+(?:-\d)?\.txt)$/.exec(url);
+        if (id === '245' || file !== `${id}-0.txt`) {
+            return new Response('Not Found', {'status': 404});
+        }
+        active++;
+        mostActive = Math.max(mostActive, active);
+        return new Promise((resolve) => {
+            setImmediate(() => {
+                active--;
+                resolve(new Response(failing[id] ?? gutenbergFile()));
+            });
+        });
+    };
+    let books;
+    const {calls, output} = await withSite(site, async () => {
+        books = await chooseGutenberg(seBooks, candidates, genres, repositories, {'books': 100, 'maxAge': 30, 'cacheOnly': false});
+    });
+
+    // The books - general fiction's 27 passing texts and 48 mysteries' (the quota's 40 - 205's replaced by 241 - and 8
+    // of the remaining 9 filling the catalog), most downloaded first
+    const chosen = [
+        ...fiction.filter((book) => !['103', '110', '120'].includes(book.id)),
+        ...mysteries.filter((book) => !['205', '245'].includes(book.id))
+    ];
+    assert.deepEqual(books.map((book) => book.id), chosen.map((book) => book.id));
+    assert.deepEqual(books.map((book) => book.rank), chosen.map((book, ix) => ix + 1));
+    const [{downloads, ...first}] = fiction;
+    assert.equal(downloads, 150);
+    assert.deepEqual(books[0], {
+        ...first,
+        'rank': 1,
+        'words': 1234,
+        'text': {'url': rawURL('Book_101', '101.txt'), 'format': 'gutenberg-text', 'encoding': 'windows-1252'}
+    });
+    assert.deepEqual(books[1].words, 740);
+    assert.deepEqual(books[1].text, {'url': rawURL('Book_102', '102-0.txt'), 'format': 'gutenberg-text', 'encoding': 'utf-8'});
+
+    // Each text checked once - at most eight at once
+    const textURLs = calls.map(([url]) => url).filter((url) => url.endsWith('-0.txt'));
+    assert.equal(textURLs.length, 79);
+    assert.equal(new Set(textURLs).size, 79);
+    assert.equal(mostActive, 8);
+    assert.deepEqual(calls.map(([url]) => url).filter((url) => url.includes('/Book_245/')), [
+        rawURL('Book_245', '245-0.txt'), rawURL('Book_245', '245.txt'), rawURL('Book_245', '245-8.txt')
+    ]);
+
+    // The texts' measures are cached
+    const textCache = readJSONCache('gitenberg/quality.json');
+    assert.equal(Object.keys(textCache).length, 80);
     assert.deepEqual(
-        JSON.parse(readFileSync(join(cacheDir, 'gitenberg', 'search.json'), 'utf-8')),
-        {'2701': 'Moby-Dick_2701', '3000': null}
+        textCache['110'], {'version': qualityVersion, 'file': '110-0.txt', 'encoding': 'utf-8', 'words': 8, 'reason': 'too short'}
+    );
+
+    // Each genre's coverage - the reasons by count
+    const coverage = {
+        'fiction': '  fiction: 29 books of 75 - 2 Standard Ebooks, 27 Gutenberg of 30 tried (2 too short, 1 notes)',
+        'mystery': '  mystery: 48 books of 40 - 0 Standard Ebooks, 48 Gutenberg of 50 tried (1 notes, 1 no text file)'
+    };
+    assert.deepEqual(
+        output, genreKeys.map((genre) => coverage[genre] ?? `  ${genre}: 0 books of 40 - 0 Standard Ebooks, 0 Gutenberg of 0 tried`)
     );
 });
 
 
-test('gutenbergBooks, cache-only', async () => {
+test('chooseGutenberg, cache-only', async () => {
     resetCache();
-    const results = Array.from({'length': 101}, (unused, index) => gutendexResult(index + 1, `Book ${index + 1}`, 'Writer, A'));
-    writeCache('gutendex/page-1.json', JSON.stringify({'next': null, results}));
-    const textCache = {'101': {'repository': null, 'text': null, 'checked': 0}};
-    for (let id = 2; id <= 100; id++) {
-        textCache[id] = {'repository': `Book_${id}`, 'text': {'url': `https://example.com/${id}.txt`, 'encoding': 'utf-8', 'bytes': 0}};
-    }
-    writeCache('gitenberg/texts.json', JSON.stringify(textCache));
+
+    // 201 general fiction candidates - 200 of their texts measured, the last not downloaded
+    const candidates = Array.from({'length': 201}, (unused, ix) => gutenbergCandidate(ix + 1, `Book ${ix + 1}`, 'A Writer', 1));
+    const genres = bookGenreKeys(candidates, () => 'fiction');
+    const repositories = new Map(candidates.map((book) => [book.id, `Book_${book.id}`]));
+    const textCache = Object.fromEntries(candidates.slice(0, 200).map((book) => [
+        book.id, {'version': qualityVersion, 'file': `${book.id}-0.txt`, 'encoding': 'utf-8', 'words': 1000, 'reason': null}
+    ]));
+    writeCache('gitenberg/quality.json', JSON.stringify(textCache));
     let books;
     const {calls, output} = await withSite({}, async () => {
-        books = await gutenbergBooks({'gutenberg': 1000, 'maxAge': 30, 'cacheOnly': true}, []);
+        books = await chooseGutenberg([], candidates, genres, repositories, {'books': 300, 'maxAge': 30, 'cacheOnly': true});
     });
-    assert.equal(calls.length, 0);
-    assert.equal(books.length, 99);
-    assert.equal(books[0].id, '2');
-    assert.equal(books[0].words, null);
-    assert.deepEqual(output, [
-        'Gutendex: page 1 - 101 books',
-        'Gutenberg: 101 candidates (0 Standard Ebooks duplicates, 0 duplicate editions, 0 reference works)',
-        'Gutenberg: 100 of 101 texts resolved',
-        'Gutenberg: 99 books (1 not in GITenberg, 1 not yet resolved)'
-    ]);
+    assert.equal(books.length, 200);
+    assert.deepEqual(books.at(-1).text, {'url': rawURL('Book_200', '200-0.txt'), 'format': 'gutenberg-text', 'encoding': 'utf-8'});
+    assert.deepEqual(calls, []);
+    assert.equal(output[0], 'Gutenberg: 200 texts checked');
+    assert.equal(
+        output[genreKeys.indexOf('fiction') + 1],
+        '  fiction: 200 books of 300 - 0 Standard Ebooks, 200 Gutenberg of 201 tried (1 not downloaded)'
+    );
+    assert.deepEqual(readJSONCache('gitenberg/quality.json'), textCache);
 });
 
 
 //
 // The catalog
 //
-
-
-// The genre keys
-const genreKeys = Object.keys(genreNames());
 
 
 // The fake Ollama - each book's voice helen, and its genres the second and first
@@ -454,19 +548,52 @@ const ollama = fakeOllama((name) => ({
 })[name]);
 
 
+// Gutenberg's catalog - Frankenstein (its UTF-8 text passes), Pride and Prejudice (a Standard Ebooks book), Moby Dick
+// (its text is too short), and A Tale of Two Cities (its plain text is Windows-1252), most downloaded first
+const catalogRecords = [
+    gutenbergRDF(1342, 'Pride and Prejudice', 'Austen, Jane', 600),
+    gutenbergRDF(84, 'Frankenstein; or, the modern prometheus', 'Shelley, Mary Wollstonecraft', 500),
+    gutenbergRDF(2701, 'Moby Dick; Or, The Whale', 'Melville, Herman', 400),
+    gutenbergRDF(98, 'A Tale of Two Cities', 'Dickens, Charles', 300)
+];
+const gitenbergList = 'gutenberg_id\trepo_name\n84\tFrankenstein_84\n1342\tPride-and-Prejudice_1342\n2701\tMoby-Dick_2701\n' +
+    '98\tA-Tale-of-Two-Cities_98\n';
+const frankensteinBook = {
+    'source': 'gutenberg',
+    'id': '84',
+    'title': 'Frankenstein',
+    'subtitle': 'Or, the Modern Prometheus',
+    'author': 'Mary Wollstonecraft Shelley',
+    'description': 'A book about frankenstein; or, the modern prometheus.',
+    'subjects': ['Fiction'],
+    'language': 'en',
+    'cover': 'https://www.gutenberg.org/cache/epub/84/pg84.cover.medium.jpg',
+    'rank': 1,
+    'words': 740,
+    'text': {'url': rawURL('Frankenstein_84', '84-0.txt'), 'format': 'gutenberg-text', 'encoding': 'utf-8'}
+};
+
+
 test('buildCatalog', async () => {
     resetCache();
+    const archivePath = join(tempDir, 'buildCatalog', 'rdf-files.tar.bz2');
+    writeArchive(archivePath, catalogRecords);
     const output = join(tempDir, 'out', 'catalog.json');
     const site = {
         [seListURL(1)]: text(seListing([seItem(prideId, 'Pride and Prejudice', 'Jane Austen', '/images/covers/pride.jpg')], null)),
         [`${seURL}${prideId}`]: text(pridePage),
-        [gutendexURL(1)]: json({'next': null, 'results': [gutendexResult(84, 'Frankenstein', 'Shelley, Mary Wollstonecraft')]}),
-        [gitenbergListURL]: text('84\tFrankenstein_84\n'),
-        [rawURL('Frankenstein_84', '84-0.txt')]: () => new Response(null, {'headers': {'Content-Length': '598000'}}),
+        [gutenbergCatalogURL]: () => new Response(readFileSync(archivePath)),
+        [gitenbergListURL]: text(gitenbergList),
+        [rawURL('Frankenstein_84', '84-0.txt')]: text(gutenbergFile()),
+        [rawURL('Moby-Dick_2701', '2701-0.txt')]: text('A short text.'),
+        [rawURL('A-Tale-of-Two-Cities_98', '98.txt')]: text(Buffer.from(gutenbergFile('Café crème.'), 'latin1')),
         'http://ollama.test/api/show': (options) => ollama('/api/show', JSON.parse(options.body)),
         'http://ollama.test/v1/systemone': (options) => ollama('/v1/systemone', JSON.parse(options.body))
     };
-    const options = {'gutenberg': 10, 'standardebooks': Infinity, 'maxAge': 30, 'cacheOnly': false, output, 'voiceModel': 'test:1b'};
+    const options = {
+        'books': 10, 'gutenberg': 10, 'standardebooks': Infinity, 'maxAge': 30, 'pageMaxAge': 365, 'cacheOnly': false, output,
+        'voiceModel': 'test:1b'
+    };
     const {calls, output: lines} = await withSite(site, async () => {
         await buildCatalog(options);
     });
@@ -475,21 +602,54 @@ test('buildCatalog', async () => {
     assert.match(catalog.generated, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
     assert.deepEqual(Object.keys(catalog.sources), ['standardebooks', 'gutenberg']);
     assert.deepEqual(catalog.genres, genreNames());
+    const bookGenres = [genreKeys[1], genreKeys[0]];
     assert.deepEqual(catalog.books, [
-        {...prideBook, 'voice': 'helen', 'genres': [genreKeys[1], genreKeys[0]]},
+        {...prideBook, 'voice': 'helen', 'genres': bookGenres},
+        {...frankensteinBook, 'voice': 'helen', 'genres': bookGenres},
         {
-            ...gutenbergBook(84, 'Frankenstein', 'Mary Wollstonecraft Shelley', 1, rawURL('Frankenstein_84', '84-0.txt')),
+            'source': 'gutenberg',
+            'id': '98',
+            'title': 'A Tale of Two Cities',
+            'author': 'Charles Dickens',
+            'description': 'A book about a tale of two cities.',
+            'subjects': ['Fiction'],
+            'language': 'en',
+            'cover': 'https://www.gutenberg.org/cache/epub/98/pg98.cover.medium.jpg',
+            'rank': 2,
+            'words': 742,
+            'text': {'url': rawURL('A-Tale-of-Two-Cities_98', '98.txt'), 'format': 'gutenberg-text', 'encoding': 'windows-1252'},
             'voice': 'helen',
-            'genres': [genreKeys[1], genreKeys[0]]
+            'genres': bookGenres
         }
     ]);
+
+    // The genres decided for every book and candidate, and the voices cast for the catalog's books
     const systemone = calls.filter(([url]) => url === 'http://ollama.test/v1/systemone').map(([, request]) => JSON.parse(request.body));
-    assert.equal(systemone.length, 4);
+    assert.deepEqual(systemone.map((request) => [request.state.title, Object.keys(request.questions)]), [
+        ['Pride and Prejudice', ['genre']],
+        ['Frankenstein: Or, the Modern Prometheus', ['genre']],
+        ['Moby Dick: Or, The Whale', ['genre']],
+        ['A Tale of Two Cities', ['genre']],
+        ['Pride and Prejudice', ['voice']],
+        ['Frankenstein: Or, the Modern Prometheus', ['voice']],
+        ['A Tale of Two Cities', ['voice']]
+    ]);
     assert.equal(systemone[0].model, 'test:1b');
     assert.deepEqual(systemone[0].state, {
         'title': 'Pride and Prejudice', 'author': 'Jane Austen', 'subjects': 'Fiction, Romance', 'description': 'A novel of manners.'
     });
-    assert.match(lines.at(-1), /catalog\.json: 1 Standard Ebooks and 1 Gutenberg books, \d+ bytes$/);
+    assert.deepEqual(calls.filter(([url]) => url.includes('/GITenberg/')).map(([url]) => url), [
+        rawURL('Frankenstein_84', '84-0.txt'),
+        rawURL('Moby-Dick_2701', '2701-0.txt'),
+        rawURL('A-Tale-of-Two-Cities_98', '98-0.txt'),
+        rawURL('A-Tale-of-Two-Cities_98', '98.txt')
+    ]);
+    assert.deepEqual(lines.filter((line) => /^(?:Gutenberg| {2}biography)/.test(line)), [
+        'Gutenberg: 4 English texts in its catalog',
+        'Gutenberg: 3 candidates (0 not in GITenberg, 1 Standard Ebooks duplicates, 0 duplicate editions, 0 reference works)',
+        '  biography: 3 books of 40 - 1 Standard Ebooks, 2 Gutenberg of 3 tried (1 too short)'
+    ]);
+    assert.match(lines.at(-1), /catalog\.json: 1 Standard Ebooks and 2 Gutenberg books, \d+ bytes$/);
 
     // No Gutenberg books - the decisions cached
     const {calls: noGutenbergCalls} = await withSite(site, async () => {
@@ -506,18 +666,20 @@ test('buildCatalog', async () => {
 
 
 test('catalog.js, command line', async () => {
-    // The cache - a Standard Ebooks book and a Gutenberg book
+    // The cache - a Standard Ebooks book, Gutenberg's catalog, the GITenberg list, and Frankenstein's text (measured
+    // with older rules); A Tale of Two Cities' text isn't cached
     resetCache();
     writeCache(
         'standardebooks/list-1.html',
         seListing([seItem(prideId, 'Pride and Prejudice', 'Jane Austen', '/images/covers/pride.jpg')], null)
     );
     writeCache('standardebooks/book_jane-austen_pride-and-prejudice.html', pridePage);
-    writeCache('gutendex/page-1.json', JSON.stringify({'next': null, 'results': [gutendexResult(84, 'Frankenstein', 'Shelley, Mary')]}));
-    writeCache('gitenberg/texts.json', JSON.stringify({
-        '84': {
-            'repository': 'Frankenstein_84', 'text': {'url': rawURL('Frankenstein_84', '84-0.txt'), 'encoding': 'utf-8', 'bytes': 598000}
-        }
+    writeArchive(join(cacheDir, 'gutenberg', 'rdf-files.tar.bz2'), catalogRecords);
+    writeCache('gitenberg/GITenberg_repo_list.tsv', gitenbergList);
+    writeCache('gitenberg/texts/84.txt.gz', gzipSync(gutenbergFile()));
+    writeCache('gitenberg/quality.json', JSON.stringify({
+        '84': {'version': qualityVersion - 1, 'file': '84-0.txt', 'encoding': 'utf-8', 'words': 0, 'reason': 'old'},
+        '2701': {'version': qualityVersion, 'file': '2701-0.txt', 'encoding': 'utf-8', 'words': 8, 'reason': 'too short'}
     }));
 
     // The fake Ollama
@@ -525,29 +687,37 @@ test('catalog.js, command line', async () => {
     const output = join(tempDir, 'cli', 'catalog.json');
     let result;
     try {
-        result = await runTool('catalog', ['--cache-only', '--voice-model', 'test:1b', '-o', output], {'OLLAMA_HOST': server.host});
+        result = await runTool(
+            'catalog', ['--cache-only', '--books', '5', '--voice-model', 'test:1b', '-o', output], {'OLLAMA_HOST': server.host}
+        );
     } finally {
         await server.close();
     }
-    assert.equal(result.code, 0);
     assert.equal(result.stderr, '');
+    assert.equal(result.code, 0);
     const lines = result.stdout.trimEnd().split('\n').map((line) => line.replace(/^\[\d+:\d\d\] /, ''));
-    assert.deepEqual(lines.slice(0, 5), [
+    assert.deepEqual(lines.filter((line) => /^(?:Standard Ebooks|Gutenberg| {2}biography)/.test(line)), [
         'Standard Ebooks: listing page 1 - 1 books',
         'Standard Ebooks: 1 books (0 without a book page or EPUB)',
-        'Gutendex: page 1 - 1 books',
-        'Gutenberg: 1 candidates (0 Standard Ebooks duplicates, 0 duplicate editions, 0 reference works)',
-        'Gutenberg: 1 books (0 not in GITenberg)'
+        'Gutenberg: 4 English texts in its catalog',
+        'Gutenberg: 3 candidates (0 not in GITenberg, 1 Standard Ebooks duplicates, 0 duplicate editions, 0 reference works)',
+        '  biography: 2 books of 40 - 1 Standard Ebooks, 1 Gutenberg of 3 tried (1 too short, 1 not downloaded)'
     ]);
     assert.match(lines.at(-1), /catalog\.json: 1 Standard Ebooks and 1 Gutenberg books, \d+ bytes$/);
     const catalog = JSON.parse(readFileSync(output, 'utf-8'));
-    assert.deepEqual(catalog.books.map((book) => [book.id, book.title, book.author, book.voice]), [
-        [prideId, 'Pride and Prejudice', 'Jane Austen', 'helen'],
-        ['84', 'Frankenstein', 'Mary Shelley', 'helen']
+    assert.deepEqual(catalog.books.map((book) => [book.id, book.title, book.author, book.words, book.voice]), [
+        [prideId, 'Pride and Prejudice', 'Jane Austen', 122000, 'helen'],
+        ['84', 'Frankenstein', 'Mary Wollstonecraft Shelley', 740, 'helen']
     ]);
     assert.deepEqual(
         server.requests.map(([, url]) => url),
-        ['/api/show', '/v1/systemone', '/v1/systemone', '/api/show', '/v1/systemone', '/v1/systemone']
+        ['/api/show', '/v1/systemone', '/v1/systemone', '/v1/systemone', '/v1/systemone', '/api/show', '/v1/systemone', '/v1/systemone']
+    );
+
+    // Frankenstein's text measured again
+    assert.deepEqual(
+        readJSONCache('gitenberg/quality.json')['84'],
+        {'version': qualityVersion, 'file': '84-0.txt', 'encoding': 'utf-8', 'words': 740, 'reason': null}
     );
 });
 

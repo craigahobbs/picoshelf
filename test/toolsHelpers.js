@@ -1,13 +1,13 @@
 // The catalog tools' test helpers (test/testTools*.js) - a temporary cache directory, a fake Ollama decision model (in
-// process and as a server for the command lines), a fake site and clock for the catalog builder, and running a tool's
-// command line. Importing this module sets PICOSHELF_CACHE (tools/decide.js reads it at import), so a test imports it
-// first, then the tools (with await import).
+// process and as a server for the command lines), a fake site and clock for the catalog builder, Gutenberg's RDF
+// records, archive, and text files, and running a tool's command line. Importing this module sets PICOSHELF_CACHE
+// (tools/decide.js reads it at import), so a test imports it first, then the tools (with await import).
 
 import {after, mock} from 'node:test';
+import {execFile, execFileSync} from 'node:child_process';
 import {mkdirSync, mkdtempSync, rmSync, writeFileSync} from 'node:fs';
 import {strict as assert} from 'node:assert';
 import {createServer} from 'node:http';
-import {execFile} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {join} from 'node:path';
 import process from 'node:process';
@@ -171,4 +171,102 @@ export async function withSite(site, fn) {
         'sleeps': sleepMock.mock.calls.map((call) => call.arguments[0]),
         output
     };
+}
+
+
+// A Gutenberg text file - its header, a title and author ("A Book" by "An Author" - 740 words in all, prepared), more
+// paragraphs, and its footer
+export function gutenbergFile(...more) {
+    const paragraph = 'The quick brown fox jumps over the lazy dog, and the dog sleeps on in the warm sun all day long. '.repeat(5).trim();
+    return [
+        'The Project Gutenberg eBook of A Book', 'Title: A Book', 'Author: An Author',
+        '*** START OF THE PROJECT GUTENBERG EBOOK A BOOK ***', 'A BOOK', 'By An Author', ...Array(7).fill(paragraph), ...more,
+        '*** END OF THE PROJECT GUTENBERG EBOOK A BOOK ***', 'The license.'
+    ].join('\n\n');
+}
+
+
+// A Gutenberg RDF record (rdf-files.tar.bz2's cache/epub/<id>/pg<id>.rdf) - in the real records' shape. options:
+// title, creators (names), rights, downloads, summaries, languages, type, subjects ([vocabulary, value] - "LCSH",
+// "LCC"), bookshelves, and files ([url, extent (null for none), [media types]]); a missing option is left out.
+export function rdfRecord(id, options = {}) {
+    const {
+        title = null, creators = [], rights = null, downloads = null, summaries = [], languages = [], type = null, subjects = [],
+        bookshelves = [], files = []
+    } = options;
+    const integer = 'rdf:datatype="http://www.w3.org/2001/XMLSchema#integer"';
+    const imt = 'http://purl.org/dc/terms/IMT';
+    const block = (tag, vocabulary, value, indent = '    ') => [
+        `<${tag}>`,
+        `  <rdf:Description rdf:nodeID="N${id}">`,
+        ...(vocabulary === null ? [] : [`    <dcam:memberOf rdf:resource="${vocabulary}"/>`]),
+        `    ${value}`,
+        '  </rdf:Description>',
+        `</${tag}>`
+    ].map((line) => `${indent}${line}`);
+    const lines = [
+        '<?xml version="1.0" encoding="utf-8"?>',
+        '<rdf:RDF xml:base="http://www.gutenberg.org/"',
+        '  xmlns:dcterms="http://purl.org/dc/terms/"',
+        '  xmlns:pgterms="http://www.gutenberg.org/2009/pgterms/"',
+        '  xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"',
+        '  xmlns:cc="http://web.resource.org/cc/"',
+        '  xmlns:dcam="http://purl.org/dc/dcam/"',
+        '>',
+        `  <pgterms:ebook rdf:about="ebooks/${id}">`,
+        '    <dcterms:publisher>Project Gutenberg</dcterms:publisher>',
+        ...(rights === null ? [] : [`    <dcterms:rights>${rights}</dcterms:rights>`]),
+        ...(downloads === null ? [] : [`    <pgterms:downloads ${integer}>${downloads}</pgterms:downloads>`]),
+        ...creators.flatMap((name) => [
+            '    <dcterms:creator>',
+            `      <pgterms:agent rdf:about="2009/agents/${id}">`,
+            `        <pgterms:name>${name}</pgterms:name>`,
+            `        <pgterms:alias>${name}, Alias</pgterms:alias>`,
+            '      </pgterms:agent>',
+            '    </dcterms:creator>'
+        ]),
+        ...(title === null ? [] : [`    <dcterms:title>${title}</dcterms:title>`]),
+        ...summaries.map((summary) => `    <pgterms:marc520>${summary}</pgterms:marc520>`),
+        ...languages.flatMap((language) => block(
+            'dcterms:language', null, `<rdf:value rdf:datatype="http://purl.org/dc/terms/RFC4646">${language}</rdf:value>`
+        )),
+        ...subjects.flatMap(([vocabulary, value]) => block(
+            'dcterms:subject', `http://purl.org/dc/terms/${vocabulary}`, `<rdf:value>${value}</rdf:value>`
+        )),
+        ...(type === null ? [] : block('dcterms:type', 'http://purl.org/dc/terms/DCMIType', `<rdf:value>${type}</rdf:value>`)),
+        ...bookshelves.flatMap((shelf) => block('pgterms:bookshelf', '2009/pgterms/Bookshelf', `<rdf:value>${shelf}</rdf:value>`)),
+        ...files.flatMap(([url, extent, types]) => [
+            '    <dcterms:hasFormat>',
+            `      <pgterms:file rdf:about="${url}">`,
+            `        <dcterms:isFormatOf rdf:resource="ebooks/${id}"/>`,
+            ...(extent === null ? [] : [`        <dcterms:extent ${integer}>${extent}</dcterms:extent>`]),
+            ...types.flatMap((mediaType) => block(
+                'dcterms:format', imt, `<rdf:value rdf:datatype="${imt}">${mediaType}</rdf:value>`, '        '
+            )),
+            '      </pgterms:file>',
+            '    </dcterms:hasFormat>'
+        ]),
+        '  </pgterms:ebook>',
+        '  <cc:Work rdf:about="">',
+        '    <cc:license rdf:resource="https://creativecommons.org/publicdomain/zero/1.0/"/>',
+        '  </cc:Work>',
+        '</rdf:RDF>'
+    ];
+    return `${lines.join('\n')}\n`;
+}
+
+
+// Write Gutenberg's RDF archive (rdf-files.tar.bz2) of records (rdfRecord's), in order - with the system tar, as the
+// catalog builder reads it
+export function writeArchive(path, records) {
+    const dir = mkdtempSync(join(tempDir, 'rdf-'));
+    const names = records.map((record, index) => {
+        const name = join('cache', 'epub', String(index + 1), `pg${index + 1}.rdf`);
+        mkdirSync(join(dir, name, '..'), {'recursive': true});
+        writeFileSync(join(dir, name), record);
+        return name;
+    });
+    mkdirSync(join(path, '..'), {'recursive': true});
+    execFileSync('tar', ['-cjf', path, '-C', dir, ...names]);
+    rmSync(dir, {'recursive': true, 'force': true});
 }

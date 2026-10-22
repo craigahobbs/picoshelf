@@ -42,18 +42,32 @@ PicoShelf is a [javascript-build](https://github.com/craigahobbs/javascript-buil
   encyclopedia prose; CC BY-SA, credited on each article)
 - `test/` - the unit tests of the app and the tools (`node --test`, with jsdom for the browser; 100% coverage)
 - `data/catalog.json` - the book catalog, each book with its narrator's voice and its genres (`make catalog`)
-- `tools/` - the catalog builder (`catalog.js` - every Standard Ebooks book and the most-downloaded Project Gutenberg
-  books, its pages cached under `cache/catalog/`), and the decisions a local Ollama decision model makes about each
-  book (`decide.js`): its narrator (`voicecast.js`; `voicelabels.json`, 132 hand-cast books, scores the decision models)
-  and its genres (`genres.js`)
+- `tools/` - the catalog builder (`catalog.js` - every Standard Ebooks book and Project Gutenberg's books balanced by
+  genre; `gutenbergrdf.js` reads Gutenberg's catalog and `quality.js` judges each text; everything it fetches is
+  cached under `cache/catalog/`), and the decisions a local Ollama decision model makes about each book
+  (`decide.js`): its narrator (`voicecast.js`; `voicelabels.json`, 132 hand-cast books, scores the decision models) and
+  its genres (`genres.js`)
 - `package.json` - the PicoVox dependency (`picovox`) and the development dependencies
 - `Makefile` - javascript-build's targets (`make commit` - the tests, lint, documentation, and 100% coverage), and
   `make app`, `make run`, and `make catalog`
 
 ## The catalog and its narrators
 
-`make catalog` rebuilds `data/catalog.json` (`node tools/catalog.js`; `--cache-only` builds from the cached pages
-alone). Each book's default narrator is cast by a local [Ollama](https://ollama.com) decision model,
+`make catalog` rebuilds `data/catalog.json` (`node tools/catalog.js`; `--cache-only` builds from the cache alone) - a
+catalog of 5,000 books (`--books`): every Standard Ebooks book, and Project Gutenberg's books chosen by genre. Each
+genre gets a share of the catalog by the square root of its popularity (its Gutenberg candidates' downloads) and at
+least 40 books, filled with its most-downloaded books - so popular genres get more books, and small ones aren't
+starved. The candidates are the 8,000 most-downloaded English Gutenberg books (`--gutenberg`) in the GITenberg mirror
+(the app reads Gutenberg's texts there - gutenberg.org doesn't allow browsers to fetch them), from Gutenberg's own
+catalog file (`rdf-files.tar.bz2`), without reference works, Standard Ebooks duplicates, or less popular editions.
+
+Each chosen text must read well aloud (`tools/quality.js`, measured on the text as the app prepares it): not under 500
+or over 500,000 words, and not dense with bracketed notes, stray markup, numbers inside words, mangled characters, or
+tables - which turns away variorum and annotated editions, reference compilations, and garbled texts (about one in ten
+of the most popular). A rejected book is replaced by its genre's next candidate. The build logs each genre's books,
+candidates tried, and why any were turned away.
+
+Each book's default narrator is cast by a local [Ollama](https://ollama.com) decision model,
 `kev:9b-nvfp4` (`ollama pull kev:9b-nvfp4`, with Ollama running): it answers a choice of the ten designed voices, each
 with casting notes, about the book's title, author, subjects, and description - Jane Austen gets Helen, a composed,
 refined voice, and Moby Dick gets Robert, a deep, weathered one. The casts are cached by model and book, so a rebuild
@@ -79,6 +93,13 @@ The app imports PicoVox by its package name (`import ... from 'picovox/lib/synth
 static site can't resolve bare imports, so `make app` copies the package's `lib/` into the site (`picovox/lib/`) and
 rewrites the app's imports to relative ones. To update PicoVox, change its version in `package.json` (`~1.6` takes the
 latest 1.6 release) and rebuild (`make clean app`).
+
+## Offline
+
+A service worker (`static/sw.js`) caches the site - the app, PicoVox and its models, and the catalog - so PicoShelf
+opens without a connection after one visit online, and the books you've opened (kept in the browser's IndexedDB) play
+offline. It answers from the network when it can, so a new version is used at once; `make app` writes its version (a
+hash of the site's files) and its file list.
 
 ## Running locally
 

@@ -1,50 +1,64 @@
-// Build the book catalog, data/catalog.json - every Standard Ebooks book and the most-downloaded English Project
-// Gutenberg books whose plain text is in the GITenberg mirror on GitHub (the app fetches texts from their sources with
-// CORS at play time, so the catalog holds only metadata and each book's text URL).
+// Build the book catalog, data/catalog.json - every Standard Ebooks book, and Project Gutenberg's books balanced by genre:
+// each genre's share of the catalog by the square root of its popularity (its candidates' downloads), at least
+// genreFloor books, filled with its most-downloaded books whose plain text is in the GITenberg mirror on GitHub and
+// passes the quality rules (tools/quality.js). The app fetches texts from their sources with CORS at play time, so the
+// catalog holds only metadata and each book's text URL.
 //
-// node tools/catalog.js [--gutenberg <count>] [--standardebooks <count>] [--max-age <days>] [--cache-only] [-o <file>]
+// node tools/catalog.js [--books <count>] [--gutenberg <count>] [--standardebooks <count>] [--max-age <days>]
+//                       [--page-max-age <days>] [--cache-only] [--voice-model <model>] [-o <file>]
 //
-//   --gutenberg <count>       the number of top Gutenberg books (by downloads) to consider (default 1000)
+//   --books <count>           the catalog's size - its Standard Ebooks books and the Gutenberg books (default 5000)
+//   --gutenberg <count>       the number of top Gutenberg books (by downloads) whose genres are decided - the candidates
+//                             (default 8000)
 //   --standardebooks <count>  only the most popular Standard Ebooks books (default all)
-//   --max-age <days>          refetch cached listing and book pages older than this (default 30)
-//   --cache-only              no network requests - build from the cache alone (uncached pages and unresolved
-//                             Gutenberg texts are left out)
+//   --max-age <days>          refetch Gutenberg's catalog and the Standard Ebooks listing pages older than this
+//                             (default 30)
+//   --page-max-age <days>     refetch Standard Ebooks book pages older than this (default 365 - they rarely change)
+//   --cache-only              no network requests - build from the cache alone (uncached pages and texts are left out)
 //   --voice-model <model>     the Ollama decision model that casts each book's narrator and chooses its genres (default
 //                             tools/decide.js's)
 //   -o <file>                 the output file (default data/catalog.json)
 //
 // Each book's narrator - its voice - and its genres are chosen by a local Ollama decision model (tools/voicecast.js,
-// tools/genres.js; Ollama must be running, with the model pulled). Every remote page is cached under cache/catalog/, so
-// a rerun is fast and an interrupted build resumes. Requests are throttled per site (Standard Ebooks about 2 a second)
-// and retried with backoff. GITenberg repositories are found in the gitberg project's published repository list; the
-// GitHub search API (10 searches a minute without a GITHUB_TOKEN) is used only for books missing from the list.
+// tools/genres.js; Ollama must be running, with the model pulled). Gutenberg's books come from its catalog
+// (rdf-files.tar.bz2 - tools/gutenbergrdf.js), and their GITenberg repositories from the gitberg project's published
+// list. Everything fetched is cached under cache/catalog/, so a rerun is fast and an interrupted build resumes;
+// requests are throttled per site (Standard Ebooks about 2 a second) and retried with backoff.
 
 import {bookGenres, genreNames} from './genres.js';
 import {cacheDir, decisionModel, readJSONCache, root, writeFileAtomic} from './decide.js';
-import {existsSync, readFileSync, statSync} from 'node:fs';
+import {createWriteStream, existsSync, mkdirSync, readFileSync, renameSync, statSync} from 'node:fs';
+import {decodeText, prepareText} from '../lib/gutenberg.js';
+import {dirname, join} from 'node:path';
+import {gunzipSync, gzipSync} from 'node:zlib';
+import {qualityVersion, textQuality} from './quality.js';
 import {JSDOM} from 'jsdom';
+import {Readable} from 'node:stream';
 import {castBooks} from './voicecast.js';
 import {fileURLToPath} from 'node:url';
-import {join} from 'node:path';
 import {normalizeText} from '../lib/catalog.js';
+import {pipeline} from 'node:stream/promises';
 import process from 'node:process';
+import {readArchive} from './gutenbergrdf.js';
 
 
 const userAgent = 'picoshelf-catalog/1.0 (+https://github.com/craigahobbs/picoshelf)';
 
 const seURL = 'https://standardebooks.org';
-const gutendexURL = 'https://gutendex.com/books/';
+const gutenbergCatalogURL = 'https://www.gutenberg.org/cache/epub/feeds/rdf-files.tar.bz2';
 const gitenbergListURL = 'https://raw.githubusercontent.com/gitenberg-dev/gitberg/master/gitenberg/data/GITenberg_repo_list.tsv';
 const gitenbergRawURL = 'https://raw.githubusercontent.com/GITenberg/';
-const githubSearchURL = 'https://api.github.com/search/repositories';
 
 // The minimum milliseconds between requests to a host
 const hostIntervals = {
     'standardebooks.org': 500,
-    'gutendex.com': 1000,
-    'raw.githubusercontent.com': 100,
-    'api.github.com': 1000
+    'www.gutenberg.org': 1000,
+    'raw.githubusercontent.com': 100
 };
+
+// The smallest genre's books, and the texts checked at once (GITenberg's raw files, throttled as above)
+const genreFloor = 40;
+const textConcurrency = 8;
 
 // The catalog's sources
 const sources = {
@@ -68,17 +82,21 @@ const subjectCount = 8;
 // Parse the command line
 export function parseArgs(args) {
     const options = {
-        'gutenberg': 1000, 'standardebooks': Infinity, 'maxAge': 30, 'cacheOnly': false, 'output': join(root, 'data', 'catalog.json'),
-        'voiceModel': decisionModel
+        'books': 5000, 'gutenberg': 8000, 'standardebooks': Infinity, 'maxAge': 30, 'pageMaxAge': 365, 'cacheOnly': false,
+        'output': join(root, 'data', 'catalog.json'), 'voiceModel': decisionModel
     };
     for (let ix = 0; ix < args.length; ix++) {
         const arg = args[ix];
-        if (arg === '--gutenberg') {
+        if (arg === '--books') {
+            options.books = Number(args[++ix]);
+        } else if (arg === '--gutenberg') {
             options.gutenberg = Number(args[++ix]);
         } else if (arg === '--standardebooks') {
             options.standardebooks = Number(args[++ix]);
         } else if (arg === '--max-age') {
             options.maxAge = Number(args[++ix]);
+        } else if (arg === '--page-max-age') {
+            options.pageMaxAge = Number(args[++ix]);
         } else if (arg === '--cache-only') {
             options.cacheOnly = true;
         } else if (arg === '--voice-model') {
@@ -89,7 +107,7 @@ export function parseArgs(args) {
             throw new Error(`Unknown argument "${arg}"`);
         }
     }
-    for (const name of ['gutenberg', 'standardebooks', 'maxAge']) {
+    for (const name of ['books', 'gutenberg', 'standardebooks', 'maxAge', 'pageMaxAge']) {
         if (Number.isNaN(options[name]) || options[name] < 0) {
             throw new Error(`Invalid ${name} "${options[name]}"`);
         }
@@ -210,6 +228,28 @@ export async function fetchCached(url, cacheName, {maxAge, cacheOnly}, timeout =
 }
 
 
+// Fetch a URL to a file under the cache directory - its path, refetched as fetchCached's files are (null if it isn't
+// cached with options.cacheOnly)
+export async function fetchFile(url, cacheName, {maxAge, cacheOnly}, timeout) {
+    const cachePath = join(cacheDir, cacheName);
+    if (existsSync(cachePath) && (cacheOnly || (Date.now() - statSync(cachePath).mtimeMs) < maxAge * 86400000)) {
+        return cachePath;
+    }
+    if (cacheOnly) {
+        return null;
+    }
+    const response = await fetchRetry(url, {timeout});
+    if (!response.ok) {
+        await response.body?.cancel();
+        throw new Error(`${url}: error ${response.status}`);
+    }
+    mkdirSync(dirname(cachePath), {'recursive': true});
+    await pipeline(Readable.fromWeb(response.body), createWriteStream(`${cachePath}.tmp`));
+    renameSync(`${cachePath}.tmp`, cachePath);
+    return cachePath;
+}
+
+
 // Parse HTML into a document - with one window's DOMParser (a JSDOM window per page holds gigabytes over a crawl)
 const domParser = new (new JSDOM('').window.DOMParser)();
 export function parseHTML(html) {
@@ -327,7 +367,7 @@ export async function standardEbooks(options) {
     let missing = 0;
     for (const [index, item] of listed.entries()) {
         const cacheName = `standardebooks/book${item.id.slice('/ebooks'.length).replace(/\//g, '_')}.html`;
-        const html = await fetchCached(`${seURL}${item.id}`, cacheName, options);
+        const html = await fetchCached(`${seURL}${item.id}`, cacheName, {...options, 'maxAge': options.pageMaxAge});
         const book = html === null ? null : standardEbook(item, parseHTML(html));
         if (book === null) {
             log(`  Standard Ebooks: ${item.id} - no book page or EPUB download`);
@@ -391,27 +431,19 @@ export function standardEbook(item, doc) {
 //
 
 
-// The top Gutenberg books by downloads from Gutendex - English texts that aren't under copyright
-export async function gutendexBooks(options) {
-    const results = [];
-    for (let page = 1; results.length < options.gutenberg; page++) {
-        const url = `${gutendexURL}?languages=en&mime_type=text%2Fplain&page=${page}`;
-        const json = await fetchCached(url, `gutendex/page-${page}.json`, options, 180000);
-        if (json === null) {
-            break;
-        }
-        const data = JSON.parse(json);
-        for (const result of data.results) {
-            if (result.media_type === 'Text' && result.copyright !== true && results.length < options.gutenberg) {
-                results.push(result);
-            }
-        }
-        log(`Gutendex: page ${page} - ${results.length} books`);
-        if (!data.next) {
-            break;
-        }
+// Project Gutenberg's English texts that aren't under copyright, most downloaded first - from its catalog
+// (rdf-files.tar.bz2, read by tools/gutenbergrdf.js as Gutendex-style results), refetched after options.maxAge days
+export async function gutenbergRecords(options) {
+    const archivePath = await fetchFile(gutenbergCatalogURL, 'gutenberg/rdf-files.tar.bz2', options, 600000);
+    if (archivePath === null) {
+        log('Gutenberg: no cached catalog');
+        return [];
     }
-    return results;
+    const records = (await readArchive(archivePath)).filter((record) => record.media_type === 'Text' && record.languages.includes('en') &&
+        record.copyright !== true && Object.keys(record.formats).some((type) => type.startsWith('text/plain')));
+    records.sort((first, second) => (second.download_count - first.download_count) || (first.id - second.id));
+    log(`Gutenberg: ${records.length} English texts in its catalog`);
+    return records;
 }
 
 
@@ -509,12 +541,6 @@ export function gutenbergSubjects(result) {
 }
 
 
-// Approximate words from a Gutenberg plain-text file's size - about 5.8 bytes a word, less the license (about 18 KB)
-export function gutenbergWords(bytes) {
-    return bytes > 0 ? Math.max(100, Math.round((bytes - 18000) / 5.8 / 100) * 100) : null;
-}
-
-
 // The GITenberg repository names by Gutenberg id - from the gitberg project's published list
 export async function gitenbergRepositories(options) {
     const tsv = await fetchCached(gitenbergListURL, 'gitenberg/GITenberg_repo_list.tsv', options, 300000);
@@ -529,78 +555,7 @@ export async function gitenbergRepositories(options) {
 }
 
 
-// Find a GITenberg repository with the GitHub search API, honoring its rate limit (a 403 - fetchRetry retries 429s) -
-// the name or null (cached)
-const searchCacheName = 'gitenberg/search.json';
-export async function searchRepository(id, searchCache) {
-    if (searchCache.has(id)) {
-        return searchCache.get(id);
-    }
-    const headers = {'Accept': 'application/vnd.github+json'};
-    if (process.env.GITHUB_TOKEN) {
-        headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
-    }
-    const params = new URLSearchParams({'q': `_${id} in:name org:GITenberg`, 'per_page': '100'});
-    for (;;) {
-        const response = await fetchRetry(`${githubSearchURL}?${params}`, {headers});
-        if (response.status === 403) {
-            const resetTime = Number(response.headers.get('X-RateLimit-Reset')) * 1000 || (Date.now() + 60000);
-            const wait = Math.max(1000, resetTime - Date.now() + 1000);
-            log(`  GitHub search rate limit - waiting ${Math.round(wait / 1000)} s`);
-            await response.body?.cancel();
-            await services.sleep(wait);
-            continue;
-        }
-        if (!response.ok) {
-            throw new Error(`GitHub search: error ${response.status}`);
-        }
-        const data = await response.json();
-        const name = data.items.find((item) => item.name.endsWith(`_${id}`))?.name ?? null;
-        searchCache.set(id, name);
-        writeFileAtomic(join(cacheDir, searchCacheName), JSON.stringify(Object.fromEntries(searchCache), null, 1));
-
-        // Wait out an exhausted limit before the next search
-        if (response.headers.get('X-RateLimit-Remaining') === '0') {
-            const wait = Number(response.headers.get('X-RateLimit-Reset')) * 1000 - Date.now() + 1000;
-            if (wait > 0) {
-                log(`  GitHub search rate limit - waiting ${Math.round(wait / 1000)} s`);
-                await services.sleep(wait);
-            }
-        }
-        return name;
-    }
-}
-
-
-// Resolve a Gutenberg book's text in its GITenberg repository - the UTF-8 file (<id>-0.txt), the plain file (<id>.txt,
-// UTF-8 if it decodes as such, else Windows-1252), or the Latin-1 file (<id>-8.txt) - with HEAD requests
-export async function resolveText(id, repository) {
-    for (const file of [`${id}-0.txt`, `${id}.txt`, `${id}-8.txt`]) {
-        const url = `${gitenbergRawURL}${repository}/master/${file}`;
-        const response = await fetchRetry(url, {'method': 'HEAD', 'headers': {'Accept-Encoding': 'identity'}});
-        if (response.status === 404) {
-            continue;
-        }
-        if (!response.ok) {
-            throw new Error(`${url}: error ${response.status}`);
-        }
-        const bytes = Number(response.headers.get('Content-Length')) || 0;
-        let encoding = file.endsWith('-8.txt') ? 'windows-1252' : 'utf-8';
-        if (file === `${id}.txt`) {
-            const body = await fetchRetry(url);
-            try {
-                new TextDecoder('utf-8', {'fatal': true}).decode(await body.arrayBuffer());
-            } catch {
-                encoding = 'windows-1252';
-            }
-        }
-        return {'url': response.url || url, encoding, bytes};
-    }
-    return null;
-}
-
-
-// Is a Gutendex result a reference work (a dictionary, encyclopedia, index, or the like) - not for reading aloud?
+// Is a Gutenberg record a reference work (a dictionary, encyclopedia, index, or the like) - not for reading aloud?
 const referenceTitleWords = [
     'dictionary', 'dictionaries', 'encyclop(?:a)?edia', 'cyclop(?:a)?edia', 'thesaurus', 'glossary', 'concordance', 'gazetteer', 'index of'
 ];
@@ -615,28 +570,34 @@ export function isReferenceWork(result) {
 }
 
 
-// The top Gutenberg books, without Standard Ebooks duplicates or reference works, with texts in GITenberg
-export async function gutenbergBooks(options, seBooks) {
-    const results = await gutendexBooks(options);
-
+// The Gutenberg candidates - the most-downloaded options.gutenberg books in GITenberg (repositories - the newest
+// Gutenberg books aren't, and their first month's downloads are high), without reference works, Standard Ebooks
+// duplicates, or less popular editions of a book - each a catalog book (without its rank, words, and text) with its
+// downloads
+export function gutenbergCandidates(records, seBooks, repositories, options) {
     // Standard Ebooks' works, by title and author surname
     const seWorks = new Set(seBooks.flatMap((book) => surnameKeys(book.author).map((surname) => `${titleKey(book.title)}|${surname}`)));
-
-    // The candidates - not duplicating a Standard Ebooks book, or a more popular Gutenberg edition
     const candidates = [];
     const fullTitles = new Set();
+    let notInGitenberg = 0;
     let seDuplicates = 0;
     let gutenbergDuplicates = 0;
     let referenceWorks = 0;
-    for (const result of results) {
-        if (isReferenceWork(result)) {
+    for (const record of records) {
+        if (candidates.length >= options.gutenberg) {
+            break;
+        }
+        if (!repositories.has(String(record.id))) {
+            notInGitenberg++;
+            continue;
+        }
+        if (isReferenceWork(record)) {
             referenceWorks++;
             continue;
         }
-        const {title, subtitle} = gutenbergTitle(result.title);
-        const author = result.authors.map((person) => gutenbergAuthor(person.name)).filter((name) => name !== '').join(', ');
-        const surnames = surnameKeys(author);
-        if (surnames.some((surname) => seWorks.has(`${titleKey(title)}|${surname}`))) {
+        const {title, subtitle} = gutenbergTitle(record.title);
+        const author = record.authors.map((person) => gutenbergAuthor(person.name)).filter((name) => name !== '').join(', ');
+        if (surnameKeys(author).some((surname) => seWorks.has(`${titleKey(title)}|${surname}`))) {
             seDuplicates++;
             continue;
         }
@@ -646,60 +607,219 @@ export async function gutenbergBooks(options, seBooks) {
             continue;
         }
         fullTitles.add(fullTitle);
-        candidates.push({result, title, subtitle, author});
-    }
-    log(`Gutenberg: ${candidates.length} candidates (${seDuplicates} Standard Ebooks duplicates, ` +
-        `${gutenbergDuplicates} duplicate editions, ${referenceWorks} reference works)`);
-
-    // Resolve the texts - results are cached (GITenberg is a static mirror; unresolved books are retried after maxAge)
-    const repositories = await gitenbergRepositories(options);
-    const maxListedId = Math.max(...[...repositories.keys()].map(Number));
-    const textCacheName = 'gitenberg/texts.json';
-    const textCache = readJSONCache(textCacheName);
-    const searchCache = new Map(Object.entries(readJSONCache(searchCacheName)));
-    const books = [];
-    let unresolved = 0;
-    let pending = 0;
-    for (const [index, {result, title, subtitle, author}] of candidates.entries()) {
-        const id = String(result.id);
-        let cached = textCache[id];
-        if (!cached && options.cacheOnly) {
-            pending++;
-            continue;
-        }
-        if (!cached || (cached.text === null && !options.cacheOnly && (Date.now() - cached.checked) > options.maxAge * 86400000)) {
-            let repository = repositories.get(id) ?? null;
-            if (repository === null && Number(id) <= maxListedId) {
-                repository = await searchRepository(id, searchCache);
-            }
-            cached = {repository, 'text': repository === null ? null : await resolveText(id, repository), 'checked': Date.now()};
-            textCache[id] = cached;
-            writeFileAtomic(join(cacheDir, textCacheName), JSON.stringify(textCache, null, 1));
-        }
-        if ((index + 1) % 100 === 0) {
-            log(`Gutenberg: ${index + 1} of ${candidates.length} texts resolved`);
-        }
-        if (cached.text === null) {
-            unresolved++;
-            continue;
-        }
-        books.push({
+        candidates.push({
             'source': 'gutenberg',
-            id,
+            'id': String(record.id),
             title,
             ...(subtitle === '' ? {} : {subtitle}),
             author,
-            'description': gutenbergDescription(result.summaries?.[0] ?? ''),
-            'subjects': gutenbergSubjects(result),
-            'language': result.languages.includes('en') ? 'en' : result.languages[0],
-            'cover': result.formats['image/jpeg'] || null,
-            'rank': books.length + 1,
-            'words': gutenbergWords(cached.text.bytes),
-            'text': {'url': cached.text.url, 'format': 'gutenberg-text', 'encoding': cached.text.encoding}
+            'description': gutenbergDescription(record.summaries[0] ?? ''),
+            'subjects': gutenbergSubjects(record),
+            'language': 'en',
+            'cover': record.formats['image/jpeg'] ?? null,
+            'downloads': record.download_count
         });
     }
-    log(`Gutenberg: ${books.length} books (${unresolved} not in GITenberg${pending > 0 ? `, ${pending} not yet resolved` : ''})`);
-    return books;
+    log(`Gutenberg: ${candidates.length} candidates (${notInGitenberg} not in GITenberg, ${seDuplicates} Standard Ebooks ` +
+        `duplicates, ${gutenbergDuplicates} duplicate editions, ${referenceWorks} reference works)`);
+    return candidates;
+}
+
+
+// Is a decoded text UTF-8?
+function isUTF8(bytes) {
+    try {
+        new TextDecoder('utf-8', {'fatal': true}).decode(bytes);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+
+// A Gutenberg book's GITenberg text - {version, file, encoding, words, reason (why it isn't used - a quality rule,
+// tools/quality.js - or null)}, or null if it isn't cached with options.cacheOnly. The file is the UTF-8 file
+// (<id>-0.txt), the plain file (<id>.txt - UTF-8 if it decodes as such, else Windows-1252), or the Latin-1 file
+// (<id>-8.txt). GITenberg's texts don't change, so each is cached - its measure in textCache (by id), and the text itself,
+// so changed quality rules measure it again without downloading it.
+export async function gutenbergText(book, repository, textCache, options) {
+    const cached = textCache[book.id];
+    if (cached?.version === qualityVersion) {
+        return cached;
+    }
+    const textPath = join(cacheDir, 'gitenberg', 'texts', `${book.id}.txt.gz`);
+    let file = cached?.file ?? null;
+    let bytes = file !== null && existsSync(textPath) ? gunzipSync(readFileSync(textPath)) : null;
+    if (bytes === null) {
+        if (options.cacheOnly) {
+            return null;
+        }
+        file = null;
+        for (const name of [`${book.id}-0.txt`, `${book.id}.txt`, `${book.id}-8.txt`]) {
+            const url = `${gitenbergRawURL}${repository}/master/${name}`;
+            const response = await fetchRetry(url);
+            if (response.status === 404) {
+                await response.body?.cancel();
+                continue;
+            }
+            if (!response.ok) {
+                throw new Error(`${url}: error ${response.status}`);
+            }
+            bytes = new Uint8Array(await response.arrayBuffer());
+            file = name;
+            break;
+        }
+        if (file === null) {
+            textCache[book.id] = {'version': qualityVersion, file, 'encoding': null, 'words': 0, 'reason': 'no text file'};
+            return textCache[book.id];
+        }
+        writeFileAtomic(textPath, gzipSync(bytes));
+    }
+    const encoding = file.endsWith('-8.txt') || (file === `${book.id}.txt` && !isUTF8(bytes)) ? 'windows-1252' : 'utf-8';
+    const quality = textQuality(prepareText(decodeText(bytes, encoding), book).text);
+    textCache[book.id] = {'version': qualityVersion, file, encoding, 'words': quality.words, 'reason': quality.reasons.join(', ') || null};
+    return textCache[book.id];
+}
+
+
+// Each open genre's share of the remaining books - by the square root of its weight, at least floor
+function genreShares(weights, open, remaining, floor) {
+    const sum = open.reduce((current, key) => current + Math.sqrt(weights[key]), 0);
+    return Object.fromEntries(open.map((key) => [key, Math.max(floor, sum > 0 ? remaining * Math.sqrt(weights[key]) / sum : 0)]));
+}
+
+
+// The genres' sizes in a catalog of total books - each genre's share by the square root of its popularity (its
+// weight - its Gutenberg candidates' downloads), at least floor books and at least its fixed books (its Standard Ebooks
+// books, all kept). A genre whose fixed books exceed its share keeps them, and the others share the rest.
+export function genreQuotas(weights, fixed, total, floor) {
+    const quotas = {};
+    let open = Object.keys(weights);
+    let remaining = total;
+    for (;;) {
+        const shares = genreShares(weights, open, remaining, floor);
+        const over = open.filter((key) => (fixed[key] ?? 0) >= shares[key]);
+        if (over.length === 0) {
+            for (const key of open) {
+                quotas[key] = Math.round(shares[key]);
+            }
+            return quotas;
+        }
+        for (const key of over) {
+            quotas[key] = fixed[key] ?? 0;
+            remaining -= quotas[key];
+        }
+        open = open.filter((key) => !over.includes(key));
+    }
+}
+
+
+// Run tasks (async functions) at most limit at once - a function that queues a task, returning its promise
+function taskLimiter(limit) {
+    let active = 0;
+    const queue = [];
+    const next = () => {
+        if (active < limit && queue.length > 0) {
+            active++;
+            const {task, resolve, reject} = queue.shift();
+            task().then(resolve, reject).finally(() => {
+                active--;
+                next();
+            });
+        }
+    };
+    return (task) => new Promise((resolve, reject) => {
+        queue.push({task, resolve, reject});
+        next();
+    });
+}
+
+
+// Choose the Gutenberg books for a catalog of options.books books - each genre's quota (genreQuotas, less its Standard
+// Ebooks books) from its candidates in download order, then any room left from the other candidates in download order -
+// each with a GITenberg text that passes the quality rules. Each genre's coverage is logged.
+export async function chooseGutenberg(seBooks, candidates, genres, repositories, options) {
+    const primary = (book) => genres[`${book.source}|${book.id}`][0];
+    const seCounts = {};
+    for (const book of seBooks) {
+        seCounts[primary(book)] = (seCounts[primary(book)] ?? 0) + 1;
+    }
+    const weights = Object.fromEntries(Object.keys(genreNames()).map((key) => [key, 0]));
+    for (const book of candidates) {
+        weights[primary(book)] += book.downloads;
+    }
+    const quotas = genreQuotas(weights, seCounts, options.books, genreFloor);
+
+    // The texts' checks - at most textConcurrency at once (each book's once - its genre's candidates, then those not
+    // yet checked)
+    const textCacheName = 'gitenberg/quality.json';
+    const textCache = readJSONCache(textCacheName);
+    const limit = taskLimiter(textConcurrency);
+    const checks = new Set();
+    let checked = 0;
+    const check = (book) => {
+        checks.add(book.id);
+        return limit(async () => {
+            const repository = repositories.get(book.id);
+            const text = await gutenbergText(book, repository, textCache, options);
+            checked++;
+            if (checked % 200 === 0) {
+                writeFileAtomic(join(cacheDir, textCacheName), JSON.stringify(textCache));
+                log(`Gutenberg: ${checked} texts checked`);
+            }
+            return text === null ? {'reason': 'not downloaded'} : {...text, repository};
+        });
+    };
+
+    // Accept the passing books of a list in order, up to count - checked count at a time
+    const chosen = new Map();
+    const stats = Object.fromEntries(Object.keys(quotas).map((genre) => [genre, {'chosen': 0, 'tried': 0, 'reasons': {}}]));
+    const accept = async (books, count) => {
+        let accepted = 0;
+        for (let next = 0; accepted < count && next < books.length;) {
+            const batch = books.slice(next, next + count - accepted);
+            next += batch.length;
+            for (const [ix, text] of (await Promise.all(batch.map(check))).entries()) {
+                const genreStats = stats[primary(batch[ix])];
+                genreStats.tried++;
+                if (text.reason === null) {
+                    chosen.set(batch[ix], text);
+                    genreStats.chosen++;
+                    accepted++;
+                } else {
+                    genreStats.reasons[text.reason] = (genreStats.reasons[text.reason] ?? 0) + 1;
+                }
+            }
+        }
+    };
+    await Promise.all(Object.keys(quotas).map((genre) => accept(
+        candidates.filter((book) => primary(book) === genre), quotas[genre] - (seCounts[genre] ?? 0)
+    )));
+    await accept(candidates.filter((book) => !checks.has(book.id)), options.books - seBooks.length - chosen.size);
+    writeFileAtomic(join(cacheDir, textCacheName), JSON.stringify(textCache));
+
+    // Each genre's coverage
+    for (const [genre, genreStats] of Object.entries(stats)) {
+        const reasons = Object.entries(genreStats.reasons).sort((first, second) => second[1] - first[1]).
+            map(([reason, count]) => `${count} ${reason}`).join(', ');
+        log(`  ${genre}: ${(seCounts[genre] ?? 0) + genreStats.chosen} books of ${quotas[genre]} - ${seCounts[genre] ?? 0} ` +
+            `Standard Ebooks, ${genreStats.chosen} Gutenberg of ${genreStats.tried} tried${reasons === '' ? '' : ` (${reasons})`}`);
+    }
+
+    // The books, most downloaded first
+    return candidates.filter((book) => chosen.has(book)).map((candidate, index) => {
+        const book = {...candidate};
+        delete book.downloads;
+        const text = chosen.get(candidate);
+        return {
+            ...book,
+            'rank': index + 1,
+            'words': text.words,
+            'text': {
+                'url': `${gitenbergRawURL}${text.repository}/master/${text.file}`, 'format': 'gutenberg-text', 'encoding': text.encoding
+            }
+        };
+    });
 }
 
 
@@ -718,13 +838,19 @@ export function catalogJSON(catalog) {
 
 // Build the catalog with options (parseArgs's)
 export async function buildCatalog(options) {
-    const seBooks = await standardEbooks(options);
-    const gutenberg = options.gutenberg > 0 ? await gutenbergBooks(options, seBooks) : [];
+    // Standard Ebooks' books, Gutenberg's catalog, and the GITenberg repositories at once (different sites), then
+    // Gutenberg's candidates
+    const [seBooks, records, repositories] = await Promise.all([
+        standardEbooks(options), options.gutenberg > 0 ? gutenbergRecords(options) : [], gitenbergRepositories(options)
+    ]);
+    const candidates = gutenbergCandidates(records, seBooks, repositories, options);
 
-    // Each book's narrator and genres
+    // Every book's genres (the Gutenberg candidates' too - the genres choose them), the Gutenberg books, and the books'
+    // narrators
+    const genres = await bookGenres([...seBooks, ...candidates], {'model': options.voiceModel, log});
+    const gutenberg = await chooseGutenberg(seBooks, candidates, genres, repositories, options);
     const books = [...seBooks, ...gutenberg];
     const voices = await castBooks(books, {'model': options.voiceModel, log});
-    const genres = await bookGenres(books, {'model': options.voiceModel, log});
     const catalog = {
         'version': 1,
         'generated': new Date().toISOString(),
