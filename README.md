@@ -37,7 +37,9 @@ The library's authors and genres have links too - the address follows the author
 
 PicoShelf is a [javascript-build](https://github.com/craigahobbs/javascript-build#readme) package.
 
-- `static/index.html` - the page
+- `static/index.html` - the page; `static/icon.svg` - the icon (a talking book - the browser tab's), its PNGs for the home
+  screen and the web app manifest (`static/manifest.webmanifest`) rendered from it (`make icons`), and the service
+  worker (`static/sw.js`)
 - `lib/` - the app: `app.js` (the library and the player), `engine.js` (playback), `worker.js` and `renderworker.js`
   (the synthesis worker runs the voice network and its render worker the synthesizer, at once on two cores),
   `store.js` and `bookcache.js` (the listener's places and the downloaded books, in browser storage), the catalog and

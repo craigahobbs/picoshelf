@@ -25,6 +25,7 @@ Package-specific targets:
   the service worker (`static/sw.js` - a classic script, linted, tested by `test/testServiceWorker.js` - with its
   version and file list written in)
 - `make run` - `make app`, then serve `build/app/` at http://localhost:8000/
+- `make icons` - render `static/icon.svg` into the PNG icons (`static/*.png`) with headless Chrome - after changing the icon
 - `make catalog` - rebuild `data/catalog.json` (`tools/catalog.js`; needs a local Ollama - a first build decides
   every candidate's genre and every book's narrator, hours on the GPU; later builds decide only new books)
 
