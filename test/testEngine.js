@@ -90,6 +90,7 @@ class FakeAudioContext {
         this.nodes = [];
         this.sources = [];
         this.resumes = 0;
+        this.suspends = 0;
         this.onstatechange = null;
     }
 
@@ -97,6 +98,17 @@ class FakeAudioContext {
         this.resumes += 1;
         this.state = 'running';
         return Promise.resolve();
+    }
+
+    suspend() {
+        this.suspends += 1;
+        this.state = 'suspended';
+        return Promise.resolve();
+    }
+
+    close() {
+        this.state = 'closed';
+        return Promise.reject(new Error('InvalidStateError'));
     }
 
     createGain() {
@@ -107,7 +119,8 @@ class FakeAudioContext {
 
     createMediaStreamDestination() {
         const node = new FakeNode('streamDestination');
-        node.stream = {'name': 'mediaStream'};
+        const track = {'readyState': 'live'};
+        node.stream = {'name': 'mediaStream', track, 'getAudioTracks': () => [track]};
         this.nodes.push(node);
         return node;
     }
@@ -136,6 +149,7 @@ class FakeMedia {
         this.loop = false;
         this.src = null;
         this.srcObject = null;
+        this.ended = false;
         this.plays = 0;
         this.pauses = 0;
     }
@@ -987,8 +1001,12 @@ test('Engine, audio', async (testContext) => {
     context.state = 'running';
     context.onstatechange();
     assert.equal(context.resumes, 2);
+
+    // A pause pauses the media element and suspends the audio - not resumed while paused
     engine.pause();
-    context.state = 'interrupted';
+    assert.equal(media.pauses, 1);
+    assert.equal(context.suspends, 1);
+    assert.equal(context.state, 'suspended');
     context.onstatechange();
     assert.equal(context.resumes, 2);
 
@@ -1002,6 +1020,34 @@ test('Engine, audio', async (testContext) => {
     await flush();
     assert.ok(events(engine).includes('media element refused'));
     assert.ok(events(engine).includes('audio resumed (base latency 12 ms, output 20 ms)'));
+    refusePlay = false;
+
+    // A broken output - the audio context closed or interrupted, or the media element ended - is rebuilt on play
+    for (const [breakAudio, event] of [
+        [() => {
+            engine.audioContext.state = 'closed';
+        }, 'audio rebuilt (audio closed)'],
+        [() => {
+            engine.audioContext.state = 'interrupted';
+        }, 'audio rebuilt (audio interrupted)'],
+        [() => {
+            engine.mediaElement.ended = true;
+        }, 'audio rebuilt (audio suspended, media ended)']
+    ]) {
+        engine.pause();
+        const brokenContext = engine.audioContext;
+        const brokenMedia = engine.mediaElement;
+        const {pauses} = brokenMedia;
+        breakAudio();
+        engine.play();
+        assert.notEqual(engine.audioContext, brokenContext);
+        assert.notEqual(engine.mediaElement, brokenMedia);
+        assert.equal(brokenContext.onstatechange, null);
+        assert.equal(brokenMedia.pauses, pauses + 1);
+        assert.equal(engine.mediaElement.plays, 1);
+        assert.ok(events(engine).includes(event));
+        await flush();
+    }
 });
 
 
@@ -1026,31 +1072,31 @@ test('Engine, audio on iOS', async (testContext) => {
     assert.ok(events(engine).includes('audio resumed (base latency 0 ms, output 0 ms)'));
     assert.equal(context.resumes, 1);
 
-    // A pause keeps the audio session ten minutes
+    // A pause pauses the media element at once (the lock screen shows the book paused) and suspends the audio
     engine.pause();
-    assert.equal(media.pauses, 0);
-    testContext.mock.timers.tick(599000);
-    assert.equal(media.pauses, 0);
-    testContext.mock.timers.tick(1000);
     assert.equal(media.pauses, 1);
-    assert.ok(events(engine).includes('audio session released'));
+    assert.equal(context.suspends, 1);
 
-    // A play within the ten minutes keeps it
+    // A play resumes them
     engine.play();
+    assert.equal(engine.mediaElement, media);
+    assert.equal(media.plays, 2);
+    assert.equal(context.resumes, 2);
+
+    // The media element's stream ended during a pause (iOS, a long pause) - the output is rebuilt
     engine.pause();
-    testContext.mock.timers.tick(300000);
+    media.srcObject.track.readyState = 'ended';
     engine.play();
-    testContext.mock.timers.tick(600000);
-    assert.equal(media.pauses, 1);
+    assert.notEqual(engine.audioContext, context);
+    assert.notEqual(engine.mediaElement, media);
+    assert.equal(engine.mediaElement.srcObject, engine.output.connections[0].stream);
+    assert.equal(engine.mediaElement.plays, 1);
+    assert.ok(events(engine).includes('audio rebuilt (audio suspended, stream ended)'));
 
-    // A release while playing - kept
-    engine.releaseMedia(5);
-    testContext.mock.timers.tick(5000);
-    assert.equal(media.pauses, 1);
-
-    // Unloading releases it at once
+    // Unloading releases it
+    const rebuilt = engine.mediaElement;
     engine.unload();
-    assert.equal(media.pauses, 2);
+    assert.equal(rebuilt.pauses, 1);
 });
 
 

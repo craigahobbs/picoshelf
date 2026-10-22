@@ -1894,10 +1894,12 @@ test('main, media session', async () => {
 
     // The lock screen's controls
     const {handlers} = mediaSession;
+    // (pause pauses - a paused book stays paused)
     handlers.pause();
     assert.deepEqual(engine.calls.at(-1), ['pause']);
     handlers.pause();
-    assert.deepEqual(engine.calls.at(-1), ['play']);
+    assert.deepEqual(engine.calls.slice(-2), [['pause'], ['pause']]);
+    assert.equal(engine.playing, false);
     handlers.play();
     assert.deepEqual(engine.calls.at(-1), ['play']);
     handlers.seekbackward();
