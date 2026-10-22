@@ -102,10 +102,6 @@ class FakeEngine {
         this.rate = 10;
     }
 
-    get loaded() {
-        return this.text !== null;
-    }
-
     load(text, voice, startChar) {
         this.calls.push(['load', text.length, voice, startChar]);
         this.text = text;
@@ -782,6 +778,31 @@ test('main, Wikipedia shelf, today\'s articles failure', async () => {
     assert.equal(app.text('resultsStatus'), 'No articles today.');
     assert.equal(todaysCount, 2);
     app.close();
+});
+
+
+test('main, Wikipedia\'s errors and the catalog\'s', async () => {
+    // A Wikipedia error isn't the library's
+    const app = startApp({
+        'saved': {'scope': 'wikipedia'}, 'todaysArticles': () => Promise.reject(new Error('Couldn\'t reach Wikipedia.'))
+    });
+    await settle();
+    assert.equal(app.text('resultsStatus'), 'Couldn\'t reach Wikipedia.');
+    app.click(app.tab('scopeTabs', 'Library'));
+    assert.equal(app.text('resultsStatus'), '');
+    assert.equal(app.element('resultsStatus').classList.contains('error'), false);
+    app.close();
+
+    // The catalog's error stays the library's after a visit to Wikipedia
+    const app2 = startApp({'catalogResponse': Promise.resolve({'ok': false, 'status': 404})});
+    await settle();
+    app2.click(app2.tab('scopeTabs', 'Wikipedia'));
+    await settle();
+    assert.equal(app2.text('resultsStatus'), 'No articles today.');
+    app2.click(app2.tab('scopeTabs', 'Library'));
+    assert.equal(app2.text('resultsStatus'), 'The book catalog couldn\'t be loaded (404).');
+    assert.equal(app2.element('resultsStatus').classList.contains('error'), true);
+    app2.close();
 });
 
 
@@ -1481,6 +1502,71 @@ test('main, open another book while one loads', async () => {
 });
 
 
+test('main, the previous book while another downloads, or after its download failed', async () => {
+    const mediaSession = {'handlers': {}, 'setActionHandler': (action, handler) => {
+        mediaSession.handlers[action] = handler;
+    }};
+    const loading = deferred();
+    const app = await startPlayer({'load': () => loading.promise, 'beforeStart': ({window}) => {
+        Object.defineProperty(window.navigator, 'mediaSession', {'configurable': true, 'value': mediaSession});
+    }});
+    const {element, engine, window} = app;
+    engine.change({});
+    const {handlers} = mediaSession;
+
+    // Pride and Prejudice is still in the engine while Frankenstein downloads - the lock screen's controls don't move it
+    window.location.hash = '#book=pg84';
+    await settle();
+    const count = engine.calls.length;
+    handlers.play();
+    handlers.seekforward();
+    handlers.seekto({'seekTime': 10});
+    app.key('ArrowRight');
+    assert.deepEqual(engine.calls.slice(count), []);
+
+    // Nor after Frankenstein's download failed
+    loading.reject(new Error('Couldn\'t download the book.'));
+    await settle();
+    assert.equal(app.text('playerStatus'), 'Couldn\'t download the book. Press play to try again.');
+    handlers.play();
+    handlers.seekbackward();
+    app.key('ArrowLeft');
+    assert.deepEqual(engine.calls.slice(count), []);
+
+    // The mini player - Frankenstein's place, not Pride and Prejudice's
+    app.click('toLibrary');
+    await settle();
+    assert.equal(element('miniPlayerInner').querySelector('.book-title').textContent, 'Frankenstein; Or, The Modern Prometheus');
+    assert.equal(element('miniPlayerInner').querySelector('.book-meta').textContent, '0%');
+    assert.equal(element('miniPlayerInner').querySelector('.round-play').dataset.icon, 'play');
+    app.close();
+});
+
+
+test('main, the player\'s cover image fails to load', async () => {
+    const app = await startPlayer();
+    const {element, window} = app;
+    const image = element('playerCover').querySelector('img');
+    assert.equal(image.src, 'https://example.com/pride.jpg');
+
+    // A generated cover
+    image.dispatchEvent(new window.Event('error'));
+    assert.equal(element('playerCover').querySelector('img'), null);
+    assert.equal(element('playerCover').querySelector('.generated').textContent, 'Pride and Prejudice');
+
+    app.close();
+
+    // A cover failing after the book changed - the new book's cover stays
+    const app2 = await startPlayer();
+    const prideImage = app2.element('playerCover').querySelector('img');
+    app2.window.location.hash = '#book=pg84';
+    await settle();
+    prideImage.dispatchEvent(new app2.window.Event('error'));
+    assert.equal(app2.element('playerCover').querySelector('.generated').textContent, 'Frankenstein; Or, The Modern Prometheus');
+    app2.close();
+});
+
+
 test('main, back to the library without the player\'s history entry', async () => {
     const app = await startPlayer();
     app.window.history.replaceState(null, '');
@@ -1580,7 +1666,7 @@ test('main, bookmarks sheet', async (context) => {
     const {element, engine, window} = app;
     app.click('bookmarksButton');
     assert.equal(app.text('sheetTitle'), 'Bookmarks');
-    assert.equal(element('sheetBody').querySelector('.add-bookmark').textContent, ' Bookmark this spot');
+    assert.equal(element('sheetBody').querySelector('.add-bookmark').textContent, 'Bookmark this spot');
     assert.equal(element('sheetBody').querySelector('.sheet-empty').textContent,
         'No bookmarks yet. Bookmarks keep a spot to come back to - name them to remember why.');
 

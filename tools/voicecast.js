@@ -5,7 +5,7 @@
 //
 // node tools/voicecast.js [--model <model>] [--scheme <scheme>] [--eval] [--book <title>]
 //
-//   --model <model>    the Ollama decision model (default castModel)
+//   --model <model>    the Ollama decision model (default tools/decide.js's)
 //   --scheme <scheme>  the questions - "voice" (one choice of the ten voices, the default) or "split" (the narrator's
 //                      sex and the voice's style, two questions)
 //   --eval             score the model on the hand-cast books (tools/voicelabels.json) - each book's best voice first,
@@ -22,8 +22,7 @@ import process from 'node:process';
 import {readFileSync} from 'node:fs';
 
 
-// The default decision model and questions
-export const castModel = decisionModel;
+// The default questions
 export const castScheme = 'voice';
 
 // The voice question's instructions
@@ -91,7 +90,7 @@ const schemeQuestions = {
 
 
 // Cast a book - {voice, probabilities (each voice's)}
-export async function castBook(book, {model = castModel, scheme = castScheme} = {}) {
+export async function castBook(book, {model, scheme}) {
     return castAnswer(await decide(book, {model, 'questions': schemeQuestions[scheme]}), scheme);
 }
 
@@ -115,7 +114,7 @@ function castAnswer(answers, scheme) {
 
 
 // Cast books - each book's voice key, by "source|id". Casts are cached by model, scheme, and the book's state.
-export async function castBooks(books, {model = castModel, scheme = castScheme, log = null} = {}) {
+export async function castBooks(books, {model, scheme = castScheme, log}) {
     const casts = await decideBooks(books, {
         model, 'questions': schemeQuestions[scheme], 'answer': (answers) => castAnswer(answers, scheme),
         'cacheName': `voices/${model.replace(/[^a-zA-Z0-9.-]/g, '_')}-${scheme}`, 'label': 'Voices', log
@@ -130,7 +129,7 @@ async function evaluate(model, scheme) {
     await checkModel(model);
     const labels = JSON.parse(readFileSync(join(root, 'tools', 'voicelabels.json'), 'utf-8'));
     const books = new Map(catalogBooks().map((book) => [`${book.source}|${book.id}`, book]));
-    const female = new Set(Object.keys(splitVoices.female).map((style) => splitVoices.female[style]));
+    const female = new Set(Object.values(splitVoices.female));
 
     // Warm the model, then cast each book
     await castBook(books.get(`${labels[0].source}|${labels[0].id}`), {model, scheme});
@@ -161,9 +160,9 @@ async function evaluate(model, scheme) {
 // The command line
 async function main() {
     const args = process.argv.slice(2);
-    let model = castModel;
+    let model = decisionModel;
     let scheme = castScheme;
-    let title = null;
+    let title = '';
     let evalMode = false;
     for (let ix = 0; ix < args.length; ix++) {
         if (args[ix] === '--model') {
@@ -186,8 +185,7 @@ async function main() {
         return;
     }
     await checkModel(model);
-    const books = catalogBooks().filter((book) => title === null || book.title.toLowerCase().includes(title));
-    for (const book of books) {
+    for (const book of catalogBooks().filter((item) => item.title.toLowerCase().includes(title))) {
         const {voice, probabilities} = await castBook(book, {model, scheme});
         const odds = Object.entries(probabilities).sort((first, second) => second[1] - first[1]).slice(0, 3)
             .map(([key, probability]) => `${key} ${(100 * probability).toFixed(0)}%`).join(', ');

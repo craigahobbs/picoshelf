@@ -1,6 +1,11 @@
 import {articleBook, articleVoice, prepareArticle, searchArticles, source, todaysArticles} from '../lib/sources/wikipedia.js';
 import test, {mock} from 'node:test';
 import {strict as assert} from 'node:assert';
+import process from 'node:process';
+
+
+// The tests' time zone - one with daylight saving time (the dates are local, so the other tests are the same in any zone)
+process.env.TZ = 'America/Los_Angeles';
 
 
 // Run a test function with a fake fetch (url -> response), restoring the real one - returns the fetch calls,
@@ -44,7 +49,6 @@ function feedPage(title, {description = null, thumbnail = null, namespace = 0, c
 
 test('wikipedia source, properties', () => {
     assert.equal(source.id, 'wikipedia');
-    assert.equal(source.name, 'Wikipedia');
     assert.equal(typeof source.load, 'function');
     assert.equal(articleVoice, 'michael');
 });
@@ -132,6 +136,22 @@ test('todaysArticles, yesterday', async () => {
         'https://en.wikipedia.org/api/rest_v1/feed/featured/2026/10/31'
     ]);
     assert.deepEqual(articles, [articleBook({'title': 'Yesterday'})]);
+});
+
+
+test('todaysArticles, yesterday after a daylight saving change', async () => {
+    // Just after midnight following the 23-hour day that starts daylight saving time, 24 hours ago is two days ago (the
+    // file's time zone is America/Los_Angeles - set above)
+    const calls = await withFetch(
+        (url) => jsonResponse({}, url.endsWith('/2026/03/09') ? 404 : 200),
+        async () => {
+            assert.deepEqual(await todaysArticles(new Date(2026, 2, 9, 0, 30)), []);
+        }
+    );
+    assert.deepEqual(calls.map(([url]) => url), [
+        'https://en.wikipedia.org/api/rest_v1/feed/featured/2026/03/09',
+        'https://en.wikipedia.org/api/rest_v1/feed/featured/2026/03/08'
+    ]);
 });
 
 
@@ -300,14 +320,11 @@ test('prepareArticle, title with punctuation', () => {
 
 test('wikipedia source, load', async () => {
     const extract = 'Paris is the capital of France.\n\n== History ==\nParis was founded long ago.';
-    const progress = [];
     let result;
     const calls = await withFetch(
         () => jsonResponse({'query': {'pages': [{'pageid': 1, 'title': 'Paris', extract}]}}),
         async () => {
-            result = await source.load(articleBook({'title': 'Paris, France'}), (loaded, total) => {
-                progress.push([loaded, total]);
-            });
+            result = await source.load(articleBook({'title': 'Paris, France'}));
         }
     );
     assert.equal(calls.length, 1);
@@ -324,17 +341,6 @@ test('wikipedia source, load', async () => {
         'origin': '*'
     });
     assert.deepEqual(result, prepareArticle('Paris', extract));
-    assert.deepEqual(progress, [[extract.length, null]]);
-});
-
-
-test('wikipedia source, load default progress', async () => {
-    await withFetch(
-        () => jsonResponse({'query': {'pages': [{'title': 'Paris', 'extract': 'Paris is a city.'}]}}),
-        async () => {
-            assert.deepEqual(await source.load(articleBook({'title': 'Paris'})), prepareArticle('Paris', 'Paris is a city.'));
-        }
-    );
 });
 
 

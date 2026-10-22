@@ -20,17 +20,16 @@
 // GitHub search API (10 searches a minute without a GITHUB_TOKEN) is used only for books missing from the list.
 
 import {bookGenres, genreNames} from './genres.js';
-import {castBooks, castModel} from './voicecast.js';
-import {dirname, join} from 'node:path';
-import {existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync} from 'node:fs';
+import {cacheDir, decisionModel, readJSONCache, root, writeFileAtomic} from './decide.js';
+import {existsSync, readFileSync, statSync} from 'node:fs';
 import {JSDOM} from 'jsdom';
-import {cacheDir} from './decide.js';
+import {castBooks} from './voicecast.js';
 import {fileURLToPath} from 'node:url';
+import {join} from 'node:path';
 import {normalizeText} from '../lib/catalog.js';
 import process from 'node:process';
 
 
-const root = fileURLToPath(new URL('..', import.meta.url));
 const userAgent = 'picoshelf-catalog/1.0 (+https://github.com/craigahobbs/picoshelf)';
 
 const seURL = 'https://standardebooks.org';
@@ -70,7 +69,7 @@ const subjectCount = 8;
 export function parseArgs(args) {
     const options = {
         'gutenberg': 1000, 'standardebooks': Infinity, 'maxAge': 30, 'cacheOnly': false, 'output': join(root, 'data', 'catalog.json'),
-        'voiceModel': castModel
+        'voiceModel': decisionModel
     };
     for (let ix = 0; ix < args.length; ix++) {
         const arg = args[ix];
@@ -208,21 +207,6 @@ export async function fetchCached(url, cacheName, {maxAge, cacheOnly}, timeout =
     const text = await response.text();
     writeFileAtomic(cachePath, text);
     return text;
-}
-
-
-// Write a file, creating its directory, so an interrupted write never leaves a partial file
-export function writeFileAtomic(path, text) {
-    mkdirSync(dirname(path), {'recursive': true});
-    writeFileSync(`${path}.tmp`, text);
-    renameSync(`${path}.tmp`, path);
-}
-
-
-// Read a JSON cache file (an empty object if there isn't one)
-export function readJSONCache(cacheName) {
-    const path = join(cacheDir, cacheName);
-    return existsSync(path) ? JSON.parse(readFileSync(path, 'utf-8')) : {};
 }
 
 
@@ -545,7 +529,8 @@ export async function gitenbergRepositories(options) {
 }
 
 
-// Find a GITenberg repository with the GitHub search API, honoring its rate limit - the name or null (cached)
+// Find a GITenberg repository with the GitHub search API, honoring its rate limit (a 403 - fetchRetry retries 429s) -
+// the name or null (cached)
 const searchCacheName = 'gitenberg/search.json';
 export async function searchRepository(id, searchCache) {
     if (searchCache.has(id)) {
@@ -558,7 +543,7 @@ export async function searchRepository(id, searchCache) {
     const params = new URLSearchParams({'q': `_${id} in:name org:GITenberg`, 'per_page': '100'});
     for (;;) {
         const response = await fetchRetry(`${githubSearchURL}?${params}`, {headers});
-        if (response.status === 403 || response.status === 429) {
+        if (response.status === 403) {
             const resetTime = Number(response.headers.get('X-RateLimit-Reset')) * 1000 || (Date.now() + 60000);
             const wait = Math.max(1000, resetTime - Date.now() + 1000);
             log(`  GitHub search rate limit - waiting ${Math.round(wait / 1000)} s`);

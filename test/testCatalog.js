@@ -1,6 +1,4 @@
-import {
-    authorSortKey, bookAuthors, findBook, groupByAuthor, groupByGenre, listBooks, matchBooks, normalizeText, pageItems, searchBooks
-} from '../lib/catalog.js';
+import {authorSortKey, bookAuthors, findBook, groupByAuthor, groupByGenre, listBooks, matchBooks, normalizeText} from '../lib/catalog.js';
 import {strict as assert} from 'node:assert';
 import test from 'node:test';
 
@@ -43,13 +41,8 @@ test('listBooks', () => {
     const catalog = testCatalog();
     const ids = (books) => books.map((book) => book.id);
 
-    // All sources - by rank, then source order (unknown sources last), then title
+    // By rank, then source order (unknown sources last), then title
     assert.deepEqual(ids(listBooks(catalog)), ['1342', '11', 'carroll', 'x', '84']);
-    assert.deepEqual(ids(listBooks(catalog, 'all')), ['1342', '11', 'carroll', 'x', '84']);
-
-    // One source
-    assert.deepEqual(ids(listBooks(catalog, 'gutenberg')), ['1342', '11', '84']);
-    assert.deepEqual(ids(listBooks(catalog, 'none')), []);
 
     // Not sorted in place
     assert.equal(catalog.books[0].id, '11');
@@ -63,46 +56,42 @@ test('listBooks', () => {
 });
 
 
-test('searchBooks', () => {
-    const catalog = testCatalog();
-    const ids = (books) => books.map((book) => book.id);
+test('matchBooks', () => {
+    const books = listBooks(testCatalog());
+    const ids = (matches) => matches.map((book) => book.id);
 
-    // Empty query lists the source's books
-    assert.deepEqual(ids(searchBooks(catalog, '')), ['1342', '11', 'carroll', 'x', '84']);
-    assert.deepEqual(ids(searchBooks(catalog, ' ! ', 'gutenberg')), ['1342', '11', '84']);
+    // Empty query matches every book
+    assert.equal(matchBooks(books, ''), books);
+    assert.equal(matchBooks(books, ' ! '), books);
 
     // Word prefixes of title, subtitle, and author
-    assert.deepEqual(ids(searchBooks(catalog, 'alice')), ['11', 'carroll']);
-    assert.deepEqual(ids(searchBooks(catalog, 'Alice\'s')), ['11']);
-    assert.deepEqual(ids(searchBooks(catalog, 'carr look')), ['carroll']);
-    assert.deepEqual(ids(searchBooks(catalog, 'pride & prej')), ['1342']);
-    assert.deepEqual(ids(searchBooks(catalog, 'alice', 'gutenberg')), ['11']);
-    assert.deepEqual(ids(searchBooks(catalog, 'beowulf')), ['x']);
+    assert.deepEqual(ids(matchBooks(books, 'alice')), ['11', 'carroll']);
+    assert.deepEqual(ids(matchBooks(books, 'Alice\'s')), ['11']);
+    assert.deepEqual(ids(matchBooks(books, 'carr look')), ['carroll']);
+    assert.deepEqual(ids(matchBooks(books, 'pride & prej')), ['1342']);
+    assert.deepEqual(ids(matchBooks(books, 'beowulf')), ['x']);
 
-    // Subject matches after primary matches
-    assert.deepEqual(ids(searchBooks(catalog, 'fiction')), ['1342', '11', 'carroll']);
-    assert.deepEqual(ids(searchBooks(catalog, 'fantasy')), ['11', 'carroll']);
-    assert.deepEqual(ids(searchBooks(catalog, 'jane court')), ['1342']);
-    assert.deepEqual(ids(searchBooks(catalog, 'wonder')), ['11']);
-
-    // Every word must match
-    assert.deepEqual(ids(searchBooks(catalog, 'alice austen')), []);
-    assert.deepEqual(ids(searchBooks(catalog, 'zzz')), []);
-});
-
-
-test('matchBooks', () => {
-    const books = [
+    // Subject matches after primary matches, each in the books' order
+    assert.deepEqual(ids(matchBooks(books, 'fiction')), ['1342', '11', 'carroll']);
+    assert.deepEqual(ids(matchBooks(books, 'fantasy')), ['11', 'carroll']);
+    assert.deepEqual(ids(matchBooks(books, 'jane court')), ['1342']);
+    assert.deepEqual(ids(matchBooks(books, 'wonder')), ['11']);
+    const fantasy = [
         {'title': 'Fantasy Stories', 'author': 'A'},
         {'title': 'Tales', 'author': 'B', 'subjects': ['Fantasy']}
     ];
-    assert.deepEqual(matchBooks(books, 'fantasy'), books);
-    assert.deepEqual(matchBooks([books[1], books[0]], 'fantasy'), [books[0], books[1]]);
-    assert.equal(matchBooks(books, ''), books);
+    assert.deepEqual(matchBooks([fantasy[1], fantasy[0]], 'fantasy'), [fantasy[0], fantasy[1]]);
+
+    // Every word must match
+    assert.deepEqual(ids(matchBooks(books, 'alice austen')), []);
+    assert.deepEqual(ids(matchBooks(books, 'zzz')), []);
+
+    // A book without words
+    assert.deepEqual(matchBooks([{'title': '...', 'author': ''}], 'a'), []);
 
     // Cached words - a second search of the same book
-    assert.deepEqual(matchBooks(books, 'tales'), [books[1]]);
-    assert.deepEqual(matchBooks(books, 'ta'), [books[1]]);
+    assert.deepEqual(matchBooks(fantasy, 'tales'), [fantasy[1]]);
+    assert.deepEqual(matchBooks(fantasy, 'ta'), [fantasy[1]]);
 });
 
 
@@ -176,22 +165,3 @@ test('findBook', () => {
     assert.equal(findBook(catalog, 'gutenberg', 'missing'), null);
 });
 
-
-test('pageItems', () => {
-    const items = Array.from({'length': 50}, (_value, ix) => ix);
-    assert.deepEqual(pageItems(items), {
-        'items': items.slice(0, 24), 'page': 1, 'pageCount': 3, 'total': 50, 'hasMore': true
-    });
-    assert.deepEqual(pageItems(items, 3), {
-        'items': [48, 49], 'page': 3, 'pageCount': 3, 'total': 50, 'hasMore': false
-    });
-    assert.deepEqual(pageItems(items, 2.7, 10), {
-        'items': [10, 11, 12, 13, 14, 15, 16, 17, 18, 19], 'page': 2, 'pageCount': 5, 'total': 50, 'hasMore': true
-    });
-    assert.equal(pageItems(items, 0).page, 1);
-    assert.equal(pageItems(items, -5).page, 1);
-    assert.equal(pageItems(items, Number.NaN).page, 1);
-    assert.equal(pageItems(items, '2').page, 1);
-    assert.deepEqual(pageItems(items, 9).items, []);
-    assert.deepEqual(pageItems([], 1), {'items': [], 'page': 1, 'pageCount': 0, 'total': 0, 'hasMore': false});
-});

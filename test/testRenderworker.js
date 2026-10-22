@@ -50,9 +50,9 @@ test('renderworker, unit', () => {
     // The unit, its frames a chunk at a time (an empty chunk too - it adds nothing)
     send({'type': 'begin', 'id': 7, 'unit': 3, eq, 'seed': 1003, 'pause': sentencePause, 'rate': 1.25});
     for (const chunk of frameChunks) {
-        send({'type': 'frames', 'id': 7, 'unit': 3, 'frames': packFrames(chunk), 'count': chunk.length});
+        send({'type': 'frames', 'frames': packFrames(chunk), 'count': chunk.length});
     }
-    send({'type': 'frames', 'id': 7, 'unit': 3, 'frames': new Float64Array(0), 'count': 0});
+    send({'type': 'frames', 'frames': new Float64Array(0), 'count': 0});
     send({'type': 'end', 'id': 7, 'unit': 3});
     send({'type': 'runEnd', 'id': 7});
 
@@ -108,7 +108,7 @@ test('renderworker, unknown message', () => {
 test('renderworker, error', () => {
     // Frames before a unit's begin
     posted.length = 0;
-    send({'type': 'frames', 'id': 1, 'unit': 0, 'frames': new Float64Array(32), 'count': 1});
+    send({'type': 'frames', 'frames': new Float64Array(32), 'count': 1});
     assert.equal(posted.length, 1);
     assert.equal(posted[0].message.type, 'error');
     assert.match(posted[0].message.message, /^Cannot read properties of null \(reading 'push'\) \(TypeError: /);

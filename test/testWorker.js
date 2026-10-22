@@ -1,5 +1,5 @@
-import {loadNeuralModel, picovoxVoice, unitBlocks} from '../lib/worker.js';
-import {modelLoader, paragraphPause, sentenceBlocks, sentenceFrames, sentencePause, spanFrames} from 'picovox/lib/synthesis.js';
+import {loadNeuralModel, picovoxVoice} from '../lib/worker.js';
+import {modelLoader, paragraphPause, sentenceFrames, sentencePause, spanFrames} from 'picovox/lib/synthesis.js';
 import {strict as assert} from 'node:assert';
 import {paragraphBeats} from 'picovox/lib/style.js';
 import test from 'node:test';
@@ -94,11 +94,14 @@ const traces = (posted) => messages(posted).filter((message) => message.type ===
 const untraced = (posted) => messages(posted).filter((message) => message.type !== 'trace');
 
 
-// A render worker's frames messages' frames - [rows], each row a Float64Array
+// A render worker's frames messages' frames (of a unit's begin) - [rows], each row a Float64Array
 function sentFrames(posted, id, unit) {
     const rows = [];
+    let begin = null;
     for (const {message} of posted) {
-        if (message.type === 'frames' && message.id === id && message.unit === unit) {
+        if (message.type === 'begin') {
+            begin = message;
+        } else if (message.type === 'frames' && begin.id === id && begin.unit === unit) {
             const width = message.frames.length / message.count;
             for (let row = 0; row < message.count; row++) {
                 rows.push(message.frames.slice(row * width, (row + 1) * width));
@@ -124,7 +127,7 @@ worker.send({'type': 'models', g2pModel, 'voiceModel': {manifest, encoding, weig
 await waitFor(() => untraced(worker.self.posted).length > 0);
 const modelsPosted = [...worker.self.posted];
 worker.self.posted.length = 0;
-worker.send({'type': 'prepare', 'voice': 'neural-male'});
+worker.send({'type': 'prepare'});
 await waitFor(() => worker.self.posted.length === 2);
 const preparePosted = [...worker.self.posted];
 
@@ -154,25 +157,6 @@ test('loadNeuralModel', async () => {
     // Loaded once
     assert.equal(loadNeuralModel(() => Promise.reject(new Error('not imported')), trace), loading);
     assert.deepEqual(events, ['voice model imported']);
-});
-
-
-test('unitBlocks', async () => {
-    const neuralModel = await loadNeuralModel();
-    const text = 'Call me Ishmael.';
-
-    // A sentence
-    const blocks = [...unitBlocks(neuralModel, text, {'voice': 'neural-female'})];
-    const expected = [...sentenceBlocks(neuralModel, text, {'voice': 'female', 'rate': 1, 'seed': 1, 'pause': sentencePause})];
-    assert.deepEqual(blocks, expected);
-    assert.equal(blocks[0].length, Math.round(24000 * sentencePause));
-
-    // A paragraph's first sentence, faster, with another seed
-    const options = {'voice': 'james', 'rate': 1.5, 'seed': 7, 'paragraphStart': true};
-    assert.deepEqual(
-        [...unitBlocks(neuralModel, text, options)],
-        [...sentenceBlocks(neuralModel, text, {'voice': 'james', 'rate': 1.5, 'seed': 7, 'pause': paragraphPause})]
-    );
 });
 
 
@@ -246,8 +230,8 @@ test('worker, render worker relay', () => {
     renderWorker.onerror({'message': '', preventDefault});
     assert.equal(prevented, 2);
     assert.deepEqual(messages(posted), [
-        {'type': 'error', 'id': null, 'message': 'render worker: Script error'},
-        {'type': 'error', 'id': null, 'message': 'render worker: (no message)'}
+        {'type': 'error', 'message': 'render worker: Script error'},
+        {'type': 'error', 'message': 'render worker: (no message)'}
     ]);
 });
 
@@ -265,7 +249,7 @@ async function runUnits(data, done = null) {
 }
 
 
-// The render worker's messages, without the frames
+// The render worker's messages' types (and units), without their frames
 const renderedSummary = (rendered) => messages(rendered).map(({type, unit}) => (unit === undefined ? type : `${type} ${unit}`));
 
 
@@ -292,7 +276,7 @@ test('worker, units', async () => {
     assert.deepEqual(rendered.at(-1).message, {'type': 'runEnd', 'id': 5});
     const end0 = summary.indexOf('end 0');
     assert.ok(end0 > 1);
-    assert.ok(summary.slice(1, end0).every((type) => type === 'frames 0'));
+    assert.ok(summary.slice(1, end0).every((type) => type === 'frames'));
     assert.equal(summary[end0 + 1], 'begin 1');
     const [{message: begin0}] = rendered;
     const expected0 = sentenceFrames(model, units[0].text, {'voice': 'male', 'rate': 1.2});
@@ -306,7 +290,7 @@ test('worker, units', async () => {
     // Each frames message - its rows end to end, transferred - the unit's frames
     for (const {message, transfer} of rendered) {
         if (message.type === 'frames') {
-            assert.equal(message.id, 5);
+            assert.deepEqual(Object.keys(message), ['type', 'frames', 'count']);
             assert.ok(message.count > 0);
             assert.equal(message.frames.length % message.count, 0);
             assert.deepEqual(transfer, [message.frames.buffer]);
@@ -360,7 +344,7 @@ test('worker, unit already finished', async () => {
     let {posted} = skipped;
     const {rendered} = skipped;
     assert.deepEqual(untraced(posted), [{'type': 'unitStart', 'id': 21, 'unit': 12}]);
-    assert.deepEqual(renderedSummary(rendered).filter((type) => type !== 'frames 12'), ['begin 12', 'end 12', 'runEnd']);
+    assert.deepEqual(renderedSummary(rendered).filter((type) => type !== 'frames'), ['begin 12', 'end 12', 'runEnd']);
 
     // Not the last run's last unit, another voice, another rate, other spans - spoken
     for (const [unit, unitVoice, rate] of [
@@ -389,7 +373,7 @@ test('worker, cancel', async () => {
     worker.send({'type': 'cancel'});
     const {posted, rendered} = await runUnits({'id': 31, 'units': units.slice(1), 'voice': 'neural-male', 'rate': 1});
     assert.deepEqual(untraced(posted), [{'type': 'unitStart', 'id': 31, 'unit': 1}]);
-    assert.ok(messages(rendered).every((message) => message.id === 31));
+    assert.ok(messages(rendered).every((message) => message.type === 'frames' || message.id === 31));
 });
 
 
@@ -415,10 +399,10 @@ test('worker, cancel during a unit', async () => {
             {'id': 41, 'units': [{'index': 2, 'text': 'Three.'}], 'voice': 'neural-male', 'rate': 1}
         );
         assert.deepEqual(untraced(posted), [{'type': 'unitStart', 'id': 40, 'unit': 0}]);
-        assert.deepEqual(renderedSummary(rendered).filter((type) => type !== 'frames 0'), ['begin 0', 'end 0']);
+        assert.deepEqual(renderedSummary(rendered).filter((type) => type !== 'frames'), ['begin 0', 'end 0']);
         assert.deepEqual(untraced(laterPosted), [{'type': 'unitStart', 'id': 41, 'unit': 2}]);
-        assert.deepEqual(renderedSummary(laterRendered).filter((type) => type !== 'frames 2'), ['begin 2', 'end 2', 'runEnd']);
-        assert.ok(messages(laterRendered).every((message) => message.id === 41));
+        assert.deepEqual(renderedSummary(laterRendered).filter((type) => type !== 'frames'), ['begin 2', 'end 2', 'runEnd']);
+        assert.ok(messages(laterRendered).every((message) => message.type === 'frames' || message.id === 41));
     } finally {
         renderWorker.onPost = null;
     }
@@ -434,7 +418,6 @@ test('worker, unit error', async () => {
     const [unitStart, error] = untraced(posted);
     assert.deepEqual(unitStart, {'type': 'unitStart', 'id': 50, 'unit': 0});
     assert.equal(error.type, 'error');
-    assert.equal(error.id, 50);
     assert.match(error.message, /^Unknown voice "nobody" \(Error: /);
     assert.deepEqual(renderWorker.posted, []);
 
@@ -453,7 +436,6 @@ test('worker, model errors', async () => {
     failing.send({'type': 'models', 'g2pModel': {'design': 'other'}, 'voiceModel': {'manifest': null, 'encoding': 'other', 'weights': ''}});
     await waitFor(() => untraced(posted).length === 1);
     const [loadError] = untraced(posted);
-    assert.equal(loadError.id, null);
     assert.match(loadError.message, /^Unsupported G2P model design other \(Error: /);
 
     // A run fails
@@ -461,15 +443,13 @@ test('worker, model errors', async () => {
     failing.send({'type': 'units', 'id': 60, 'units': [{'index': 0, 'text': 'One.'}], 'voice': 'neural-male', 'rate': 1});
     await waitFor(() => untraced(posted).length === 1);
     const [runError] = untraced(posted);
-    assert.equal(runError.id, 60);
     assert.match(runError.message, /^Unsupported G2P model design other/);
 
     // The voice model fails to load
     posted.length = 0;
-    failing.send({'type': 'prepare', 'voice': 'neural-male'});
+    failing.send({'type': 'prepare'});
     await waitFor(() => untraced(posted).length === 1);
     const [prepareError] = untraced(posted);
-    assert.equal(prepareError.id, null);
     assert.match(prepareError.message, /^unknown package encoding other \(Error: /);
     assert.deepEqual(failing.renderWorker.posted, []);
 });

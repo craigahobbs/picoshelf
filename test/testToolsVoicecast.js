@@ -1,20 +1,13 @@
-import {existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
-import test, {after, before, beforeEach, mock} from 'node:test';
+import {cacheDir, fakeOllama, ollamaServer, root, runTool, tempDir, withOllama} from './toolsHelpers.js';
+import {existsSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
+import test, {after, before, beforeEach} from 'node:test';
 import {strict as assert} from 'node:assert';
-import {createServer} from 'node:http';
-import {execFile} from 'node:child_process';
 import {join} from 'node:path';
-import process from 'node:process';
-import {tmpdir} from 'node:os';
 
 
-// The decisions' cache - a temporary directory, set before the tools are imported (decide.js reads PICOSHELF_CACHE at
-// import)
-const tempDir = mkdtempSync(join(tmpdir(), 'picoshelf-voicecast-'));
-process.env.PICOSHELF_CACHE = join(tempDir, 'cache');
-delete process.env.OLLAMA_HOST;
-const {cacheDir, decisionModel, root} = await import('../tools/decide.js');
-const {castBook, castBooks, castModel, castScheme, castVoices} = await import('../tools/voicecast.js');
+// The tools - imported after toolsHelpers.js sets their cache directory
+const {decisionModel} = await import('../tools/decide.js');
+const {castBook, castBooks, castScheme, castVoices} = await import('../tools/voicecast.js');
 
 
 // The voices by sex
@@ -48,61 +41,16 @@ const bookProbabilities = {
 };
 
 
-// A fake Ollama's response to a request - [status, response]. A question's choice is its first given option (a
-// hand-cast book's voice is labelVoices's, by its description), else the question's first option at 0.6.
-function ollamaResponse(path, body) {
-    if (path === '/api/show') {
-        if (body.model === 'missing') {
-            return [404, {'error': `model '${body.model}' not found`}];
-        }
-        return [200, {'capabilities': body.model === 'chat' ? ['completion'] : ['completion', 'decision']}];
-    }
-    const answers = {};
-    for (const [name, question] of Object.entries(body.questions)) {
-        const keys = Object.keys(question.criteria);
-        const labelVoice = name === 'voice' ? labelVoices[body.state.description] : undefined;
-        const given = bookProbabilities[body.state.title]?.[name] ??
-            (labelVoice !== undefined ? {[labelVoice]: 0.55} : {[keys[0]]: 0.6});
-        const givenTotal = Object.values(given).reduce((total, probability) => total + probability, 0);
-        const rest = (1 - givenTotal) / keys.filter((key) => !(key in given)).length;
-        const [choice] = Object.keys(given);
-        answers[name] = {choice, 'probabilities': Object.fromEntries(keys.map((key) => [key, given[key] ?? rest]))};
-    }
-    return [200, {answers}];
-}
-
-
-// Run a test function with a fake Ollama fetch - returns the fetch calls, [url, body]
-async function withFetch(fn) {
-    const fetchMock = mock.method(globalThis, 'fetch', (url, options) => {
-        const [status, response] = ollamaResponse(new URL(url).pathname, JSON.parse(options.body));
-        return Promise.resolve(new Response(JSON.stringify(response), {status, 'headers': {'Content-Type': 'application/json'}}));
-    });
-    try {
-        await fn();
-    } finally {
-        fetchMock.mock.restore();
-    }
-    return fetchMock.mock.calls.map(({'arguments': [url, options]}) => [url, JSON.parse(options.body)]);
-}
-
-
-// A fake Ollama server, for the command line's child processes
-const serverRequests = [];
-const server = createServer((request, response) => {
-    let text = '';
-    request.on('data', (chunk) => {
-        text += chunk;
-    });
-    request.on('end', () => {
-        const body = JSON.parse(text);
-        serverRequests.push([request.method, request.url, body]);
-        const [status, result] = ollamaResponse(request.url, body);
-        response.writeHead(status, {'Content-Type': 'application/json'});
-        response.end(JSON.stringify(result));
-    });
+// The fake Ollama - a question's given probabilities are the book's, by title, else a hand-cast book's voice
+// (labelVoices's, by its description) at 0.55
+const ollama = fakeOllama((name, body) => {
+    const labelVoice = name === 'voice' ? labelVoices[body.state.description] : undefined;
+    return bookProbabilities[body.state.title]?.[name] ?? (labelVoice === undefined ? undefined : {[labelVoice]: 0.55});
 });
-let ollamaHost;
+
+
+// The fake Ollama server, for the command line's child processes
+let server;
 
 
 // The test catalog
@@ -120,35 +68,22 @@ const labelsCatalogBooks = labels.map(({source, id, title, author}) => ({source,
 before(async () => {
     writeFileSync(catalogPath, JSON.stringify({'books': catalogBooks}));
     writeFileSync(labelsCatalogPath, JSON.stringify({'books': labelsCatalogBooks}));
-    await new Promise((resolve) => {
-        server.listen(0, '127.0.0.1', resolve);
-    });
-    ollamaHost = `127.0.0.1:${server.address().port}`;
+    server = await ollamaServer(ollama);
 });
 
 
-after(async () => {
-    await new Promise((resolve) => {
-        server.close(resolve);
-    });
-    rmSync(tempDir, {'recursive': true, 'force': true});
-});
+after(() => server.close());
 
 
 beforeEach(() => {
     rmSync(cacheDir, {'recursive': true, 'force': true});
-    serverRequests.length = 0;
+    server.requests.length = 0;
 });
 
 
 // Run voicecast.js - {code, stdout, stderr}
 function runVoicecast(args, catalog = catalogPath) {
-    const env = {...process.env, 'OLLAMA_HOST': ollamaHost, 'PICOSHELF_CATALOG': catalog};
-    return new Promise((resolve) => {
-        execFile(process.execPath, [join(root, 'tools', 'voicecast.js'), ...args], {env}, (error, stdout, stderr) => {
-            resolve({'code': error?.code ?? 0, stdout, stderr});
-        });
-    });
+    return runTool('voicecast', args, {'OLLAMA_HOST': server.host, 'PICOSHELF_CATALOG': catalog});
 }
 
 
@@ -164,7 +99,6 @@ function emmaSplitProbabilities() {
 
 
 test('voicecast, constants', () => {
-    assert.equal(castModel, decisionModel);
     assert.equal(castScheme, 'voice');
     assert.deepEqual(Object.keys(castVoices), [...femaleVoices, ...maleVoices]);
     assert.match(castVoices.robert, /^A man narrates in a deep, grave, weathered voice/);
@@ -173,8 +107,8 @@ test('voicecast, constants', () => {
 
 test('castBook', async () => {
     let cast;
-    const calls = await withFetch(async () => {
-        cast = await castBook(catalogBooks[0]);
+    const calls = await withOllama(ollama, async () => {
+        cast = await castBook(catalogBooks[0], {'model': 'test:model', 'scheme': 'voice'});
     });
     assert.equal(cast.voice, 'sarah');
     assert.equal(cast.probabilities.sarah, 0.6);
@@ -184,7 +118,7 @@ test('castBook', async () => {
     assert.equal(calls.length, 1);
     const [[url, body]] = calls;
     assert.equal(url, 'http://127.0.0.1:11434/v1/systemone');
-    assert.equal(body.model, decisionModel);
+    assert.equal(body.model, 'test:model');
     assert.deepEqual(Object.keys(body.questions), ['voice']);
     assert.equal(body.questions.voice.type, 'choice');
     assert.match(body.questions.voice.instructions, /^Cast the narrator of this audiobook/);
@@ -194,7 +128,7 @@ test('castBook', async () => {
 
 test('castBook, split', async () => {
     let cast;
-    const calls = await withFetch(async () => {
+    const calls = await withOllama(ollama, async () => {
         cast = await castBook(catalogBooks[0], {'model': 'test:model', 'scheme': 'split'});
     });
     assert.deepEqual(cast, {'voice': 'helen', 'probabilities': emmaSplitProbabilities()});
@@ -209,17 +143,19 @@ test('castBook, split', async () => {
 
 
 test('castBooks', async () => {
+    const logs = [];
     let casts;
-    const calls = await withFetch(async () => {
-        casts = await castBooks(catalogBooks);
+    const calls = await withOllama(ollama, async () => {
+        casts = await castBooks(catalogBooks, {'model': 'test:model', 'log': (line) => logs.push(line)});
     });
     assert.deepEqual(casts, {'test|1': 'sarah', 'test|2': 'sarah'});
+    assert.deepEqual(logs.length, 1);
     assert.deepEqual(calls.map(([url, body]) => [url, body.model]), [
-        ['http://127.0.0.1:11434/api/show', decisionModel],
-        ['http://127.0.0.1:11434/v1/systemone', decisionModel],
-        ['http://127.0.0.1:11434/v1/systemone', decisionModel]
+        ['http://127.0.0.1:11434/api/show', 'test:model'],
+        ['http://127.0.0.1:11434/v1/systemone', 'test:model'],
+        ['http://127.0.0.1:11434/v1/systemone', 'test:model']
     ]);
-    const cache = JSON.parse(readFileSync(join(cacheDir, 'voices', 'kev_9b-nvfp4-voice.json'), 'utf-8'));
+    const cache = JSON.parse(readFileSync(join(cacheDir, 'voices', 'test_model-voice.json'), 'utf-8'));
     assert.deepEqual(Object.keys(cache), ['test|1', 'test|2']);
     assert.equal(cache['test|1'].voice, 'sarah');
     assert.equal(cache['test|1'].probabilities.sarah, 0.6);
@@ -229,7 +165,7 @@ test('castBooks', async () => {
 test('castBooks, split', async () => {
     const logs = [];
     let casts;
-    await withFetch(async () => {
+    await withOllama(ollama, async () => {
         casts = await castBooks(catalogBooks, {'model': 'test:model', 'scheme': 'split', 'log': (line) => logs.push(line)});
     });
     assert.deepEqual(casts, {'test|1': 'helen', 'test|2': 'sarah'});
@@ -240,7 +176,7 @@ test('castBooks, split', async () => {
 
     // Cast again - cached
     logs.length = 0;
-    const calls = await withFetch(async () => {
+    const calls = await withOllama(ollama, async () => {
         casts = await castBooks(catalogBooks, {'model': 'test:model', 'scheme': 'split', 'log': (line) => logs.push(line)});
     });
     assert.equal(calls.length, 1);
@@ -277,12 +213,12 @@ test('voicecast.js --eval', async () => {
     assert.deepEqual(lines.slice(1), [...misses, '']);
 
     // The model checked and warmed, then each book cast
-    assert.deepEqual(serverRequests.slice(0, 2).map(([, url, body]) => [url, body.model]), [
+    assert.deepEqual(server.requests.slice(0, 2).map(([, url, body]) => [url, body.model]), [
         ['/api/show', 'test:model'],
         ['/v1/systemone', 'test:model']
     ]);
-    assert.equal(serverRequests.length, 2 + labels.length);
-    assert.equal(serverRequests[1][2].state.description, serverRequests[2][2].state.description);
+    assert.equal(server.requests.length, 2 + labels.length);
+    assert.equal(server.requests[1][2].state.description, server.requests[2][2].state.description);
 
     // Nothing cached
     assert(!existsSync(cacheDir));
@@ -292,7 +228,7 @@ test('voicecast.js --eval', async () => {
 test('voicecast.js --book', async () => {
     const result = await runVoicecast(['--model', 'test:model', '--scheme', 'split', '--book', 'eMMa']);
     assert.deepEqual(result, {'code': 0, 'stdout': 'Emma (Jane Austen): helen - helen 35%, sarah 21%, robert 15%\n', 'stderr': ''});
-    assert.deepEqual(serverRequests.map(([method, url, body]) => [method, url, body.model]), [
+    assert.deepEqual(server.requests.map(([method, url, body]) => [method, url, body.model]), [
         ['POST', '/api/show', 'test:model'],
         ['POST', '/v1/systemone', 'test:model']
     ]);
@@ -307,7 +243,7 @@ test('voicecast.js, all books', async () => {
             'Moby Dick (Herman Melville): sarah - sarah 60%, helen 4%, amy 4%\n',
         'stderr': ''
     });
-    assert.deepEqual(serverRequests.map(([, url, body]) => [url, body.model]), [
+    assert.deepEqual(server.requests.map(([, url, body]) => [url, body.model]), [
         ['/api/show', decisionModel],
         ['/v1/systemone', decisionModel],
         ['/v1/systemone', decisionModel]
@@ -319,29 +255,19 @@ test('voicecast.js, all books', async () => {
 test('voicecast.js --eval, not a decision model', async () => {
     const result = await runVoicecast(['--model', 'chat', '--eval'], labelsCatalogPath);
     assert.deepEqual(result, {'code': 1, 'stdout': '', 'stderr': 'error: "chat" isn\'t a decision model\n'});
-    assert.equal(serverRequests.length, 1);
-});
-
-
-test('voicecast.js, unknown model', async () => {
-    const result = await runVoicecast(['--model', 'missing']);
-    assert.deepEqual(result, {
-        'code': 1,
-        'stdout': '',
-        'stderr': 'error: Unknown model "missing" - ollama pull missing (Ollama /api/show (404): model \'missing\' not found)\n'
-    });
+    assert.equal(server.requests.length, 1);
 });
 
 
 test('voicecast.js, unknown scheme', async () => {
     const result = await runVoicecast(['--scheme', 'bogus', '--eval']);
     assert.deepEqual(result, {'code': 1, 'stdout': '', 'stderr': 'error: Unknown scheme "bogus"\n'});
-    assert.equal(serverRequests.length, 0);
+    assert.equal(server.requests.length, 0);
 });
 
 
 test('voicecast.js, unknown argument', async () => {
     const result = await runVoicecast(['--bogus']);
     assert.deepEqual(result, {'code': 1, 'stdout': '', 'stderr': 'error: Unknown argument "--bogus"\n'});
-    assert.equal(serverRequests.length, 0);
+    assert.equal(server.requests.length, 0);
 });

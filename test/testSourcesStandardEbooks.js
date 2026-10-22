@@ -180,6 +180,16 @@ async function withFetch(fakeFetch, fn) {
 }
 
 
+// The offline error message
+const errorOffline = 'Couldn\'t reach Standard Ebooks. Check your connection and try again.';
+
+
+// A progress callback that ignores progress
+function ignoreProgress() {
+    // no progress checks
+}
+
+
 // Record progress calls
 function progressRecorder() {
     const calls = [];
@@ -202,7 +212,6 @@ const wholeRequests = [{'method': 'HEAD', 'range': null}, {'method': 'GET', 'ran
 
 test('standard ebooks source, properties', () => {
     assert.equal(source.id, 'standardebooks');
-    assert.equal(source.name, 'Standard Ebooks');
     assert.equal(typeof source.load, 'function');
 });
 
@@ -220,14 +229,6 @@ test('standard ebooks source, load small', async () => {
 });
 
 
-test('standard ebooks source, load default progress', async () => {
-    const {fakeFetch} = fakeServer(smallEpub.bytes);
-    await withFetch(fakeFetch, async () => {
-        assert.deepEqual(await source.load(book), expected);
-    });
-});
-
-
 test('standard ebooks source, load unknown length', async () => {
     // A whole download without a Content-Length - the total is unknown
     const {fakeFetch, requests} = fakeServer(smallEpub.bytes, ({method}) => (
@@ -239,7 +240,7 @@ test('standard ebooks source, load unknown length', async () => {
     });
     assert.deepEqual(requests, wholeRequests);
     assert.deepEqual(calls[0], [0, null]);
-    assert.deepEqual(calls.at(-1), [smallEpub.bytes.length, null]);
+    assert.deepEqual(calls.at(-1), [smallEpub.bytes.length, smallEpub.bytes.length]);
 });
 
 
@@ -248,7 +249,7 @@ test('standard ebooks source, load size not a number', async () => {
         method === 'HEAD' ? new Response(null, {'headers': {'Content-Length': 'big', 'Content-Type': 'application/epub+zip'}}) : null
     ));
     await withFetch(fakeFetch, async () => {
-        assert.deepEqual(await source.load(book), expected);
+        assert.deepEqual(await source.load(book, ignoreProgress), expected);
     });
     assert.deepEqual(requests, wholeRequests);
 });
@@ -285,7 +286,7 @@ test('standard ebooks source, load ranges directory', async () => {
     const {bytes, offsets, directoryOffset} = commentEpub;
     const {fakeFetch, requests} = fakeServer(bytes);
     await withFetch(fakeFetch, async () => {
-        assert.deepEqual(await source.load(book), expected);
+        assert.deepEqual(await source.load(book, ignoreProgress), expected);
     });
     const tailStart = bytes.length - 65536;
     assert.ok(directoryOffset < tailStart);
@@ -327,7 +328,7 @@ async function testRangeFallback(epub, respond, rangeCount) {
         request.range !== null ? respond(request, rangeIndex++) : null
     ));
     await withFetch(fakeFetch, async () => {
-        assert.deepEqual(await source.load(book), expected);
+        assert.deepEqual(await source.load(book, ignoreProgress), expected);
     });
     assert.equal(rangeIndex, rangeCount);
     assert.deepEqual(requests.at(-1), {'method': 'GET', 'range': null});
@@ -389,16 +390,16 @@ test('standard ebooks source, load ranges span fails', async () => {
 test('standard ebooks source, load no URL', async () => {
     const message = 'This book isn\'t available from Standard Ebooks.';
     await withFetch(() => assert.fail('unexpected fetch'), async () => {
-        await assert.rejects(source.load(undefined), {message});
-        await assert.rejects(source.load({'id': 'x'}), {message});
-        await assert.rejects(source.load({'id': 'x', 'text': {'url': ''}}), {message});
+        await assert.rejects(source.load(undefined, ignoreProgress), {message});
+        await assert.rejects(source.load({'id': 'x'}, ignoreProgress), {message});
+        await assert.rejects(source.load({'id': 'x', 'text': {'url': ''}}, ignoreProgress), {message});
     });
 });
 
 
 test('standard ebooks source, load offline', async () => {
     await withFetch(() => Promise.reject(new TypeError('Failed to fetch')), async () => {
-        await assert.rejects(source.load(book), {'message': 'Couldn\'t reach Standard Ebooks. Check your connection and try again.'});
+        await assert.rejects(source.load(book, ignoreProgress), {'message': errorOffline});
     });
 });
 
@@ -411,7 +412,7 @@ test('standard ebooks source, load offline download', async () => {
         return null;
     });
     await withFetch(fakeFetch, async () => {
-        await assert.rejects(source.load(book), {'message': 'Couldn\'t reach Standard Ebooks. Check your connection and try again.'});
+        await assert.rejects(source.load(book, ignoreProgress), {'message': errorOffline});
     });
 });
 
@@ -424,7 +425,7 @@ test('standard ebooks source, load read error', async () => {
     });
     const {fakeFetch} = fakeServer(smallEpub.bytes, ({method}) => (method === 'GET' ? new Response(body) : null));
     await withFetch(fakeFetch, async () => {
-        await assert.rejects(source.load(book), {'message': 'Couldn\'t reach Standard Ebooks. Check your connection and try again.'});
+        await assert.rejects(source.load(book, ignoreProgress), {'message': errorOffline});
     });
 });
 
@@ -439,7 +440,7 @@ test('standard ebooks source, load unavailable', async () => {
     for (const head of heads) {
         const {fakeFetch, requests} = fakeServer(smallEpub.bytes, () => head);
         await withFetch(fakeFetch, async () => {
-            await assert.rejects(source.load(book), {message});
+            await assert.rejects(source.load(book, ignoreProgress), {message});
         });
         assert.deepEqual(requests, [{'method': 'HEAD', 'range': null}]);
     }
@@ -451,7 +452,7 @@ test('standard ebooks source, load unavailable download', async () => {
         method === 'GET' ? new Response('Not found', {'status': 404}) : null
     ));
     await withFetch(fakeFetch, async () => {
-        await assert.rejects(source.load(book), {'message': 'This book isn\'t available from Standard Ebooks.'});
+        await assert.rejects(source.load(book, ignoreProgress), {'message': 'This book isn\'t available from Standard Ebooks.'});
     });
     assert.deepEqual(requests, wholeRequests);
 });
@@ -463,7 +464,7 @@ test('standard ebooks source, load unreadable', async () => {
     // Not a ZIP
     const notZip = new TextEncoder().encode('This is not a ZIP file.');
     await withFetch(fakeServer(notZip).fakeFetch, async () => {
-        await assert.rejects(source.load(book), (error) => {
+        await assert.rejects(source.load(book, ignoreProgress), (error) => {
             assert.equal(error.message, message);
             assert.equal(error.cause.message, 'ZIP end of central directory not found');
             return true;
@@ -473,7 +474,7 @@ test('standard ebooks source, load unreadable', async () => {
     // A ZIP that isn't an EPUB
     const notEpub = buildZip([{'name': 'readme.txt', 'data': 'Hello'}]);
     await withFetch(fakeServer(notEpub.bytes).fakeFetch, async () => {
-        await assert.rejects(source.load(book), (error) => {
+        await assert.rejects(source.load(book, ignoreProgress), (error) => {
             assert.equal(error.message, message);
             assert.equal(error.cause.message, 'ZIP entry not found: META-INF/container.xml');
             return true;

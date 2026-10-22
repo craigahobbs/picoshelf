@@ -75,18 +75,18 @@ export function bookState(book) {
 
 
 // Ask a book the questions - the answers, by question name
-export async function decide(book, {model = decisionModel, questions}) {
+export async function decide(book, {model, questions}) {
     const {answers} = await ollamaPost('/v1/systemone', {model, 'state': bookState(book), questions, 'keep_alive': '10m'});
     return answers;
 }
 
 
 // Decide books - each book's decision (answer(answers), an object), by "source|id", cached in cacheName's file under
-// the cache directory by the questions and the book's state; label names the decisions in the progress lines
-export async function decideBooks(books, {model = decisionModel, questions, answer, cacheName, label, log = null}) {
+// the cache directory by the questions and the book's state; label names the decisions in log's progress lines
+export async function decideBooks(books, {model, questions, answer, cacheName, label, log}) {
     await checkModel(model);
     const cachePath = join(cacheDir, `${cacheName}.json`);
-    const cache = existsSync(cachePath) ? JSON.parse(readFileSync(cachePath, 'utf-8')) : {};
+    const cache = readJSONCache(`${cacheName}.json`);
     const questionsHash = createHash('sha256').update(JSON.stringify(questions)).digest('hex').slice(0, 12);
     const decisions = {};
     let decided = 0;
@@ -98,24 +98,31 @@ export async function decideBooks(books, {model = decisionModel, questions, answ
             cache[key] = {hash, ...answer(await decide(book, {model, questions}))};
             decided++;
             if (decided % 100 === 0) {
-                writeCache(cachePath, cache);
-                log?.(`${label}: ${decided} books decided (${((Date.now() - start) / decided).toFixed(0)} ms a book)`);
+                writeFileAtomic(cachePath, JSON.stringify(cache));
+                log(`${label}: ${decided} books decided (${((Date.now() - start) / decided).toFixed(0)} ms a book)`);
             }
         }
         decisions[key] = cache[key];
     }
-    writeCache(cachePath, cache);
+    writeFileAtomic(cachePath, JSON.stringify(cache));
     const speed = decided > 0 ? `, ${((Date.now() - start) / decided).toFixed(0)} ms a book` : '';
-    log?.(`${label}: ${books.length} books (${decided} decided with ${model}${speed})`);
+    log(`${label}: ${books.length} books (${decided} decided with ${model}${speed})`);
     return decisions;
 }
 
 
-// Write a decisions cache, so an interrupted write never leaves a partial file
-function writeCache(path, cache) {
+// Write a file, creating its directory, so an interrupted write never leaves a partial file
+export function writeFileAtomic(path, text) {
     mkdirSync(dirname(path), {'recursive': true});
-    writeFileSync(`${path}.tmp`, JSON.stringify(cache));
+    writeFileSync(`${path}.tmp`, text);
     renameSync(`${path}.tmp`, path);
+}
+
+
+// Read a JSON file under the cache directory (an empty object if there isn't one)
+export function readJSONCache(cacheName) {
+    const path = join(cacheDir, cacheName);
+    return existsSync(path) ? JSON.parse(readFileSync(path, 'utf-8')) : {};
 }
 
 

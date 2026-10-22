@@ -1,77 +1,15 @@
-import {existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync} from 'node:fs';
-import test, {after, mock} from 'node:test';
+import {cacheDir, fakeOllama, jsonResponse, ollamaServer, resetCache, runTool, tempDir, withSite, writeCache} from './toolsHelpers.js';
+import {existsSync, readFileSync} from 'node:fs';
 import {strict as assert} from 'node:assert';
-import {createServer} from 'node:http';
-import {execFile} from 'node:child_process';
-import {fileURLToPath} from 'node:url';
 import {join} from 'node:path';
-import os from 'node:os';
 import process from 'node:process';
-import {promisify} from 'node:util';
+import test from 'node:test';
 
 
-// The catalog builder's cache, a temporary directory - set before the builder (tools/decide.js) is imported - and the
-// fake Ollama's address
-const tempDir = mkdtempSync(join(os.tmpdir(), 'picoshelf-catalog-build-'));
-const cacheDir = join(tempDir, 'cache');
-process.env.PICOSHELF_CACHE = cacheDir;
-process.env.OLLAMA_HOST = 'http://ollama.test';
-const {buildCatalog, gutenbergBooks, gutendexBooks, parseHTML, services, standardEbook, standardEbooks} =
-    await import('../tools/catalog.js');
+// The tools - imported after toolsHelpers.js sets their cache directory - and the fake Ollama's address
+const {buildCatalog, gutenbergBooks, gutendexBooks, parseHTML, standardEbook, standardEbooks} = await import('../tools/catalog.js');
 const {genreNames} = await import('../tools/genres.js');
-after(() => {
-    rmSync(tempDir, {'recursive': true, 'force': true});
-});
-
-
-// The command line tool
-const catalogPath = fileURLToPath(new URL('../tools/catalog.js', import.meta.url));
-
-
-// Empty the cache directory
-function resetCache() {
-    rmSync(cacheDir, {'recursive': true, 'force': true});
-    mkdirSync(cacheDir, {'recursive': true});
-}
-
-
-// Write a cache file
-function writeCache(name, text) {
-    mkdirSync(join(cacheDir, name, '..'), {'recursive': true});
-    writeFileSync(join(cacheDir, name), text);
-}
-
-
-// The fake clock - it moves only forward, so the builder's per-host throttle times stay in order across tests
-let clock = Date.now();
-
-
-// Run a test function with a fake site (a map of URL to response function, other URLs 404), a fake clock that a fake
-// sleep advances, and captured output - returns the fetch calls ([url, options]) and the output lines
-async function withSite(site, fn) {
-    clock = Math.ceil(clock / 1000) * 1000 + 3600000;
-    const fetchMock = mock.method(globalThis, 'fetch', (url, options) => Promise.resolve().then(
-        () => (url in site ? site[url](options) : new Response('Not Found', {'status': 404}))
-    ));
-    const nowMock = mock.method(Date, 'now', () => clock);
-    const sleepMock = mock.method(services, 'sleep', (milliseconds) => {
-        clock += milliseconds;
-        return Promise.resolve();
-    });
-    const output = [];
-    const writeMock = mock.method(services, 'write', (text) => {
-        output.push(text.replace(/^\[\d+:\d\d\] /, '').replace(/\n$/, ''));
-    });
-    try {
-        await fn();
-    } finally {
-        fetchMock.mock.restore();
-        nowMock.mock.restore();
-        sleepMock.mock.restore();
-        writeMock.mock.restore();
-    }
-    return {'calls': fetchMock.mock.calls.map((call) => call.arguments), output};
-}
+process.env.OLLAMA_HOST = 'http://ollama.test';
 
 
 // A text response function
@@ -79,7 +17,7 @@ const text = (body) => () => new Response(body);
 
 
 // A JSON response function
-const json = (data) => () => new Response(JSON.stringify(data), {'headers': {'Content-Type': 'application/json'}});
+const json = (data) => () => jsonResponse(data);
 
 
 //
@@ -406,7 +344,7 @@ test('gutenbergBooks', async () => {
             'repository': 'Cached_11', 'text': {'url': 'https://example.com/11.txt', 'encoding': 'utf-8', 'bytes': 598000}, 'checked': 0
         },
         '12': {'repository': null, 'text': null, 'checked': 0},
-        '13': {'repository': null, 'text': null, 'checked': clock + 7200000}
+        '13': {'repository': null, 'text': null, 'checked': Date.now()}
     }));
     const site = {
         [gutendexURL(1)]: json({'next': null, 'results': [
@@ -509,30 +447,24 @@ test('gutenbergBooks, cache-only', async () => {
 const genreKeys = Object.keys(genreNames());
 
 
-// A fake Ollama decision model's answer to a request - its voice or its genre
-function ollamaAnswer(path, request) {
-    if (path === '/api/show') {
-        return {'capabilities': ['completion', 'decision']};
-    }
-    if ('voice' in request.questions) {
-        return {'answers': {'voice': {'choice': 'helen', 'probabilities': {'helen': 0.9, 'sarah': 0.1}}}};
-    }
-    return {'answers': {'genre': {'choice': genreKeys[1], 'probabilities': {[genreKeys[0]]: 0.3, [genreKeys[1]]: 0.7}}}};
-}
+// The fake Ollama - each book's voice helen, and its genres the second and first
+const ollama = fakeOllama((name) => ({
+    'voice': {'helen': 0.9, 'sarah': 0.1},
+    'genre': {[genreKeys[1]]: 0.7, [genreKeys[0]]: 0.3}
+})[name]);
 
 
 test('buildCatalog', async () => {
     resetCache();
     const output = join(tempDir, 'out', 'catalog.json');
-    const ollama = (path) => (options) => new Response(JSON.stringify(ollamaAnswer(path, JSON.parse(options.body))));
     const site = {
         [seListURL(1)]: text(seListing([seItem(prideId, 'Pride and Prejudice', 'Jane Austen', '/images/covers/pride.jpg')], null)),
         [`${seURL}${prideId}`]: text(pridePage),
         [gutendexURL(1)]: json({'next': null, 'results': [gutendexResult(84, 'Frankenstein', 'Shelley, Mary Wollstonecraft')]}),
         [gitenbergListURL]: text('84\tFrankenstein_84\n'),
         [rawURL('Frankenstein_84', '84-0.txt')]: () => new Response(null, {'headers': {'Content-Length': '598000'}}),
-        'http://ollama.test/api/show': ollama('/api/show'),
-        'http://ollama.test/v1/systemone': ollama('/v1/systemone')
+        'http://ollama.test/api/show': (options) => ollama('/api/show', JSON.parse(options.body)),
+        'http://ollama.test/v1/systemone': (options) => ollama('/v1/systemone', JSON.parse(options.body))
     };
     const options = {'gutenberg': 10, 'standardebooks': Infinity, 'maxAge': 30, 'cacheOnly': false, output, 'voiceModel': 'test:1b'};
     const {calls, output: lines} = await withSite(site, async () => {
@@ -573,9 +505,6 @@ test('buildCatalog', async () => {
 //
 
 
-const execFileAsync = promisify(execFile);
-
-
 test('catalog.js, command line', async () => {
     // The cache - a Standard Ebooks book and a Gutenberg book
     resetCache();
@@ -592,30 +521,15 @@ test('catalog.js, command line', async () => {
     }));
 
     // The fake Ollama
-    const requests = [];
-    const server = createServer((request, response) => {
-        let body = '';
-        request.on('data', (chunk) => {
-            body += chunk;
-        });
-        request.on('end', () => {
-            requests.push(request.url);
-            response.writeHead(200, {'Content-Type': 'application/json'});
-            response.end(JSON.stringify(ollamaAnswer(request.url, JSON.parse(body))));
-        });
-    });
-    await new Promise((resolve) => {
-        server.listen(0, '127.0.0.1', resolve);
-    });
+    const server = await ollamaServer(ollama);
     const output = join(tempDir, 'cli', 'catalog.json');
     let result;
     try {
-        result = await execFileAsync(process.execPath, [catalogPath, '--cache-only', '--voice-model', 'test:1b', '-o', output], {
-            'env': {...process.env, 'PICOSHELF_CACHE': cacheDir, 'OLLAMA_HOST': `127.0.0.1:${server.address().port}`}
-        });
+        result = await runTool('catalog', ['--cache-only', '--voice-model', 'test:1b', '-o', output], {'OLLAMA_HOST': server.host});
     } finally {
-        server.close();
+        await server.close();
     }
+    assert.equal(result.code, 0);
     assert.equal(result.stderr, '');
     const lines = result.stdout.trimEnd().split('\n').map((line) => line.replace(/^\[\d+:\d\d\] /, ''));
     assert.deepEqual(lines.slice(0, 5), [
@@ -631,13 +545,13 @@ test('catalog.js, command line', async () => {
         [prideId, 'Pride and Prejudice', 'Jane Austen', 'helen'],
         ['84', 'Frankenstein', 'Mary Shelley', 'helen']
     ]);
-    assert.deepEqual(requests, ['/api/show', '/v1/systemone', '/v1/systemone', '/api/show', '/v1/systemone', '/v1/systemone']);
+    assert.deepEqual(
+        server.requests.map(([, url]) => url),
+        ['/api/show', '/v1/systemone', '/v1/systemone', '/api/show', '/v1/systemone', '/v1/systemone']
+    );
 });
 
 
 test('catalog.js, command line error', async () => {
-    await assert.rejects(
-        execFileAsync(process.execPath, [catalogPath, '--bogus'], {'env': {...process.env, 'PICOSHELF_CACHE': cacheDir}}),
-        {'code': 1, 'stdout': '', 'stderr': 'error: Unknown argument "--bogus"\n'}
-    );
+    assert.deepEqual(await runTool('catalog', ['--bogus']), {'code': 1, 'stdout': '', 'stderr': 'error: Unknown argument "--bogus"\n'});
 });

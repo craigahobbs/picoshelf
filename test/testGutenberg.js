@@ -913,6 +913,47 @@ test('prepareText, unlabeled headings', () => {
 });
 
 
+test('prepareText, unwrapped paragraphs', () => {
+    // Each paragraph one line - prose (no multi-line paragraphs isn't verse), so its ordinals are chapters
+    const raw = [
+        'I.',
+        '',
+        'It was a dark and stormy night, and the rain fell in torrents upon the town below.',
+        '',
+        'II.',
+        '',
+        'The next morning was bright and clear, and the town was washed clean by the rain.'
+    ].join('\n');
+    assertPrepared(prepareText(raw), [
+        'Chapter I.',
+        'It was a dark and stormy night, and the rain fell in torrents upon the town below.',
+        'Chapter II.',
+        'The next morning was bright and clear, and the town was washed clean by the rain.'
+    ], [
+        ['Chapter I', 1],
+        ['Chapter II', 1]
+    ]);
+});
+
+test('prepareText, titles that start with their label', () => {
+    // A title that repeats its label loses it ('EPILOGUE' / 'EPILOGUE.'); a title word that starts with the label is kept
+    const prose = 'It was a dark and stormy night, and the rain fell in torrents upon the town\nbelow, and the wind blew.';
+    const raw = ['PART I.\nPARTING', 'ACT I. Action', 'LETTER I.\nLetters from Home', 'EPILOGUE\nEPILOGUE.']
+        .map((heading) => `${heading}\n\n${prose}`).join('\n\n');
+    const proseText = prose.replace('\n', ' ');
+    assertPrepared(prepareText(raw), [
+        'Part I. Parting.', proseText,
+        'Act I. Action.', proseText,
+        'Letter I. Letters from Home.', proseText,
+        'Epilogue.', proseText
+    ], [
+        ['Part I. Parting', 1],
+        ['Act I. Action', 2],
+        ['Letter I. Letters from Home', 2],
+        ['Epilogue', 2]
+    ]);
+});
+
 test('prepareText, verse parts', () => {
     const raw = [
         '*** START OF THE PROJECT GUTENBERG EBOOK IN MEMORIAM ***',
@@ -986,6 +1027,22 @@ test('prepareText, old header and markup', () => {
     ]);
 });
 
+
+test('prepareText, empty header fields', () => {
+    // An empty 'Title:' field - the book's title
+    const raw = [
+        'Title:',
+        'Author:',
+        '',
+        '*** START OF THE PROJECT GUTENBERG EBOOK X ***',
+        '',
+        'The text.'
+    ].join('\n');
+    const result = prepareText(raw, {'title': 'The Book', 'author': 'An Author'});
+    assert.equal(result.title, 'The Book');
+    assert.equal(result.author, 'An Author');
+    assertPrepared(result, ['The Book.', 'By An Author.', 'The text.'], []);
+});
 
 test('prepareText, footnotes', () => {
     const raw = [

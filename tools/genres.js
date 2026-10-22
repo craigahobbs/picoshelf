@@ -73,7 +73,7 @@ function genreAnswer(answers) {
 
 
 // The books' genres - each book's genre keys, by "source|id" (cached by model and the book's state)
-export async function bookGenres(books, {model = decisionModel, log = null} = {}) {
+export async function bookGenres(books, {model, log}) {
     const decisions = await decideBooks(books, {
         model, questions, 'answer': genreAnswer, 'cacheName': `genres/${model.replace(/[^a-zA-Z0-9.-]/g, '_')}`, 'label': 'Genres', log
     });

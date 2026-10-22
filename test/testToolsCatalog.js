@@ -1,64 +1,18 @@
-import {existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync} from 'node:fs';
-import test, {after, mock} from 'node:test';
+import {cacheDir, resetCache, withSite} from './toolsHelpers.js';
+import {existsSync, readFileSync, utimesSync} from 'node:fs';
+import test, {mock} from 'node:test';
 import {strict as assert} from 'node:assert';
 import {join} from 'node:path';
-import os from 'node:os';
 import process from 'node:process';
 
 
-// The catalog builder's cache, a temporary directory - set before the builder (tools/decide.js) is imported
-const cacheDir = mkdtempSync(join(os.tmpdir(), 'picoshelf-catalog-'));
-process.env.PICOSHELF_CACHE = cacheDir;
+// The tools - imported after toolsHelpers.js sets their cache directory
 const {
     catalogJSON, collapseSpace, fetchCached, fetchRetry, gitenbergRepositories, gutenbergAuthor, gutenbergDescription,
-    gutenbergSubjects, gutenbergTitle, gutenbergWords, isReferenceWork, log, parseArgs, readJSONCache, resolveText,
-    searchRepository, services, surnameKeys, titleCase, titleKey, trimDescription, uniqueSubjects, writeFileAtomic
+    gutenbergSubjects, gutenbergTitle, gutenbergWords, isReferenceWork, log, parseArgs, resolveText, searchRepository, services,
+    surnameKeys, titleCase, titleKey, trimDescription, uniqueSubjects
 } = await import('../tools/catalog.js');
-after(() => {
-    rmSync(cacheDir, {'recursive': true, 'force': true});
-});
-
-
-// Empty the cache directory
-function resetCache() {
-    rmSync(cacheDir, {'recursive': true, 'force': true});
-    mkdirSync(cacheDir, {'recursive': true});
-}
-
-
-// The fake clock - it moves only forward, so the builder's per-host throttle times stay in order across tests
-let clock = Date.now();
-
-
-// Run a test function with a fake fetch (url, options -> response), a fake clock that a fake sleep advances, and
-// captured output - returns the fetch calls ([url, options]), the sleeps (milliseconds), and the output lines. The clock
-// starts an hour past the last test's, on a second, so no host's throttle carries over.
-async function withSite(fakeFetch, fn) {
-    clock = Math.ceil(clock / 1000) * 1000 + 3600000;
-    const fetchMock = mock.method(globalThis, 'fetch', (url, options) => Promise.resolve().then(() => fakeFetch(url, options)));
-    const nowMock = mock.method(Date, 'now', () => clock);
-    const sleepMock = mock.method(services, 'sleep', (milliseconds) => {
-        clock += milliseconds;
-        return Promise.resolve();
-    });
-    const output = [];
-    const writeMock = mock.method(services, 'write', (text) => {
-        output.push(text.replace(/^\[\d+:\d\d\] /, '').replace(/\n$/, ''));
-    });
-    try {
-        await fn();
-    } finally {
-        fetchMock.mock.restore();
-        nowMock.mock.restore();
-        sleepMock.mock.restore();
-        writeMock.mock.restore();
-    }
-    return {
-        'calls': fetchMock.mock.calls.map((call) => call.arguments),
-        'sleeps': sleepMock.mock.calls.map((call) => call.arguments[0]),
-        output
-    };
-}
+const {readJSONCache} = await import('../tools/decide.js');
 
 
 // A response with a URL (a fetched response's - a constructed one's is empty)
@@ -290,20 +244,6 @@ test('catalogJSON', () => {
 }
 `);
     assert.deepEqual(JSON.parse(json), catalog);
-});
-
-
-//
-// Files
-//
-
-
-test('writeFileAtomic and readJSONCache', () => {
-    resetCache();
-    assert.deepEqual(readJSONCache('sub/test.json'), {});
-    writeFileAtomic(join(cacheDir, 'sub', 'test.json'), '{"a": 1}');
-    assert.deepEqual(readJSONCache('sub/test.json'), {'a': 1});
-    assert.equal(existsSync(join(cacheDir, 'sub', 'test.json.tmp')), false);
 });
 
 

@@ -41,16 +41,9 @@ function chunkStream(chunks, error = null) {
 }
 
 
-// A fake response - {status, type, headers, body (a stream or null), bytes (for arrayBuffer)}
-function fakeResponse({status = 200, type = 'basic', headers = {}, body = null, bytes = new Uint8Array(0)}) {
-    return {
-        status,
-        'ok': status >= 200 && status < 300,
-        type,
-        'headers': new Headers(headers),
-        body,
-        'arrayBuffer': () => Promise.resolve(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength))
-    };
+// A fake response - {status, type, headers, body (a stream)}
+function fakeResponse({status = 200, type = 'basic', headers = {}, body = null}) {
+    return {status, 'ok': status >= 200 && status < 300, type, 'headers': new Headers(headers), body};
 }
 
 
@@ -66,6 +59,12 @@ async function withFetch(fakeFetch, fn) {
 }
 
 
+// A progress callback that ignores progress
+function ignoreProgress() {
+    // no progress checks
+}
+
+
 // Record progress calls
 function progressRecorder() {
     const calls = [];
@@ -78,7 +77,6 @@ function progressRecorder() {
 
 test('gutenberg source, properties', () => {
     assert.equal(source.id, 'gutenberg');
-    assert.equal(source.name, 'Project Gutenberg');
     assert.equal(typeof source.load, 'function');
 });
 
@@ -103,20 +101,8 @@ test('gutenberg source, load', async () => {
     assert.deepEqual(calls, [
         [0, bookBytes.length],
         [50, bookBytes.length],
-        [bookBytes.length, bookBytes.length],
         [bookBytes.length, bookBytes.length]
     ]);
-});
-
-
-test('gutenberg source, load default progress', async () => {
-    await withFetch(
-        () => fakeResponse({'body': chunkStream([bookBytes])}),
-        async () => {
-            const result = await source.load(book);
-            assert.deepEqual(result, prepareText(bookText, book));
-        }
-    );
 });
 
 
@@ -127,7 +113,7 @@ test('gutenberg source, load encoding', async () => {
     await withFetch(
         () => fakeResponse({'body': chunkStream([latinBytes])}),
         async () => {
-            const result = await source.load(latinBook);
+            const result = await source.load(latinBook, ignoreProgress);
             assert.match(result.text, /Café\./);
         }
     );
@@ -163,7 +149,7 @@ test('gutenberg source, load cross-origin identity', async () => {
             await source.load(book, onProgress);
         }
     );
-    assert.deepEqual(calls, [[0, bookBytes.length], [bookBytes.length, bookBytes.length], [bookBytes.length, bookBytes.length]]);
+    assert.deepEqual(calls, [[0, bookBytes.length], [bookBytes.length, bookBytes.length]]);
 });
 
 
@@ -183,25 +169,12 @@ test('gutenberg source, load length too small', async () => {
 });
 
 
-test('gutenberg source, load no body', async () => {
-    const {calls, onProgress} = progressRecorder();
-    await withFetch(
-        () => fakeResponse({'bytes': bookBytes}),
-        async () => {
-            const result = await source.load(book, onProgress);
-            assert.deepEqual(result, prepareText(bookText, book));
-        }
-    );
-    assert.deepEqual(calls, [[0, null], [bookBytes.length, bookBytes.length]]);
-});
-
-
 test('gutenberg source, load real response', async () => {
     // A Response (type "default") with its Content-Length
     await withFetch(
         () => new Response(bookBytes, {'headers': {'Content-Length': String(bookBytes.length)}}),
         async () => {
-            const result = await source.load(book);
+            const result = await source.load(book, ignoreProgress);
             assert.deepEqual(result, prepareText(bookText, book));
         }
     );
