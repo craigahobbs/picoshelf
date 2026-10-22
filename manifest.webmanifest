@@ -1,7 +1,7 @@
 {
     "name": "PicoShelf",
     "short_name": "PicoShelf",
-    "description": "Every public-domain book, read aloud. Right in your browser.",
+    "description": "Classic books, read aloud. Right in your browser.",
     "start_url": "./",
     "scope": "./",
     "display": "standalone",
