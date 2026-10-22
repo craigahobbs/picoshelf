@@ -1,6 +1,6 @@
 # PicoShelf
 
-**Every public-domain book, read aloud. Right in your browser.**
+**Classic books, read aloud. Right in your browser.**
 
 PicoShelf is an audiobook player for public-domain books (Project Gutenberg and Standard Ebooks) and Wikipedia's
 articles. Each book is fetched

@@ -8,7 +8,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>PicoShelf</title>
-<meta name="description" content="PicoShelf - Every public-domain book, read aloud. Right in your browser.">
+<meta name="description" content="PicoShelf - Classic books, read aloud. Right in your browser.">
 <meta name="apple-mobile-web-app-title" content="PicoShelf">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
 <link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
@@ -90,7 +90,15 @@
     }
     .masthead {
         position: relative;
-        padding-right: 72px;
+        display: flex;
+        align-items: flex-start;
+        gap: 14px;
+    }
+    /* (the icon the height of the title and the tagline's two lines) */
+    .masthead-icon {
+        flex: none;
+        width: calc(1.75rem * 1.2 + 4px + 2 * 1rem * 1.45);
+        height: calc(1.75rem * 1.2 + 4px + 2 * 1rem * 1.45);
     }
     .about-button {
         position: absolute;
@@ -826,8 +834,11 @@
 
 <main id="libraryView" class="view" hidden>
     <header class="masthead">
-        <h1>PicoShelf</h1>
-        <p class="muted">Every public-domain book, read aloud. Right in your browser.</p>
+        <img class="masthead-icon" src="icon.svg" alt="" width="84" height="84">
+        <div>
+            <h1>PicoShelf</h1>
+            <p class="muted">Classic books, read aloud.<br>Right in your browser.</p>
+        </div>
         <button id="aboutButton" class="about-button" type="button">About</button>
     </header>
 
