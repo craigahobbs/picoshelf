@@ -1044,6 +1044,96 @@ test('main, resume in the library', async () => {
 });
 
 
+test('main, library links', async () => {
+    // An author's link at startup - the library's authors, the author's group open and scrolled to (once the catalog loads)
+    const app = startApp({'url': `${appUrl}#author=Jane%20Austen`, 'saved': savedWithBook('library'), 'cached': cachedPride});
+    const {element, window} = app;
+    const groups = () => [...element('results').querySelectorAll('details.group')];
+    const openGroups = () => groups().filter((group) => group.open).map((group) => group.querySelector('.group-name').textContent);
+    assert.equal(window.location.hash, '#author=Jane%20Austen');
+    assert.equal(app.scrolledIntoView.length, 0);
+    await settle();
+    assert.equal(app.saved.scope, 'library');
+    assert.equal(app.saved.libraryView, 'authors');
+    assert.deepEqual(openGroups(), ['Jane Austen']);
+    assert.deepEqual(app.scrolledIntoView.map(([item, options]) => [item.dataset.group, options]), [
+        ['authors:Jane Austen', {'block': 'start'}]
+    ]);
+    assert.equal(window.location.hash, '#author=Jane%20Austen');
+
+    // Another group opened - the address is its link; closed - no link
+    const [, carroll] = groups();
+    carroll.open = true;
+    await settle();
+    assert.equal(window.location.hash, '#author=Lewis%20Carroll');
+    carroll.open = false;
+    await settle();
+    assert.equal(window.location.hash, '');
+
+    // A group closed that isn't the address's link - the link stays
+    groups()[2].open = true;
+    await settle();
+    groups()[0].open = false;
+    await settle();
+    assert.equal(window.location.hash, '#author=Mary%20Shelley');
+
+    // The genres view - a genre's link by its key; another tab - no link
+    app.click(app.tab('viewTabs', 'Genres'));
+    assert.equal(window.location.hash, '');
+    groups().find((group) => group.dataset.group === 'genres:horror').open = true;
+    await settle();
+    assert.equal(window.location.hash, '#genre=horror');
+    app.click(app.tab('scopeTabs', 'My Library'));
+    assert.equal(window.location.hash, '');
+
+    // My library's groups aren't links
+    groups()[0].open = true;
+    await settle();
+    assert.equal(window.location.hash, '');
+
+    // A genre's link followed (a pasted link) - the library's genres, the genre open
+    window.location.hash = '#genre=romance';
+    await settle();
+    assert.equal(app.saved.scope, 'library');
+    assert.equal(app.saved.libraryView, 'genres');
+    assert.deepEqual(openGroups(), ['Romance']);
+    assert.equal(app.scrolledIntoView.at(-1)[0].dataset.group, 'genres:romance');
+
+    // A genre that isn't in the catalog - the genres, nothing open or scrolled to
+    const scrolled = app.scrolledIntoView.length;
+    window.location.hash = '#genre=nonsense';
+    await settle();
+    assert.deepEqual(openGroups(), []);
+    assert.equal(app.scrolledIntoView.length, scrolled);
+    app.close();
+});
+
+
+test('main, library links with a book open', async () => {
+    // Followed in the player - the library, the book still open
+    const app = await startPlayer();
+    const {element, window} = app;
+    assert.equal(element('playerView').hidden, false);
+    window.location.hash = '#author=Mary%20Shelley';
+    await settle();
+    assert.equal(element('libraryView').hidden, false);
+    assert.equal(element('miniPlayer').hidden, false);
+    assert.equal(window.location.hash, '#author=Mary%20Shelley');
+    assert.deepEqual([...element('results').querySelectorAll('details.group[open] .group-name')].map((name) => name.textContent),
+        ['Mary Shelley']);
+    app.close();
+
+    // At startup with the listener's book - the group, the book open in the mini player
+    const app2 = startApp({'url': `${appUrl}#genre=horror`, 'saved': savedWithBook('player'), 'cached': cachedPride});
+    await settle();
+    assert.equal(app2.element('libraryView').hidden, false);
+    assert.equal(app2.element('playerView').hidden, true);
+    assert.equal(app2.element('miniPlayer').hidden, false);
+    assert.equal(app2.window.location.hash, '#genre=horror');
+    app2.close();
+});
+
+
 test('main, close the book', async () => {
     const app = startApp({'saved': savedWithBook('library'), 'cached': cachedPride});
     const {element, engine} = app;

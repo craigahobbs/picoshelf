@@ -27,6 +27,12 @@ copy it from the address bar. The link's hash parameters (key=value pairs joined
 For example, `#book=se.miguel-de-cervantes-saavedra.don-quixote.john-ormsby&section=12` opens Don Quixote at its fifth
 chapter - or at the listener's place, if that is in the section.
 
+The library's authors and genres have links too - the address follows the author or genre last opened in the Library
+(not My Library), so copy it from the address bar:
+
+- `author` - an author's books (`#author=Jane%20Austen`) - the library's Authors view, the author open
+- `genre` - a genre's books, by its key in the catalog's `genres` (`#genre=mystery`) - the Genres view, the genre open
+
 ## Layout
 
 PicoShelf is a [javascript-build](https://github.com/craigahobbs/javascript-build#readme) package.
