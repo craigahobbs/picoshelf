@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#f7f3ec" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>PicoShelf</title>
 <meta name="description" content="PicoShelf - Every public-domain book, read aloud. Right in your browser.">
@@ -90,10 +91,6 @@
     }
     .library-section {
         margin-top: 28px;
-    }
-    .library-section > h2 {
-        font-size: 1.05rem;
-        margin-bottom: 10px;
     }
 
     /* Book covers - an image, or a generated cover */
@@ -734,6 +731,10 @@
     .add-bookmark {
         width: 100%;
         margin-bottom: 10px;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
     }
     /* The startup timeline overlay (?timing) */
     .timing-overlay {
