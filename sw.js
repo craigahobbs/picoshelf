@@ -4,7 +4,7 @@
 // the app (lib/bookcache.js), so the books they've opened play offline. make app writes the version (a hash of the
 // files) and the files below; a new version replaces the old cache.
 
-const version = 'a0746cb0cc488603';
+const version = '749c10692925f4d6';
 const files = ["data/catalog.json","./","lib/app.js","lib/bookcache.js","lib/catalog.js","lib/engine.js","lib/epub.js","lib/gutenberg.js","lib/renderworker.js","lib/sources/download.js","lib/sources/gutenberg.js","lib/sources/standardebooks.js","lib/sources/wikipedia.js","lib/store.js","lib/worker.js","lib/zip.js","picovox/LICENSE","picovox/lib/fft.js","picovox/lib/g2p.js","picovox/lib/index.js","picovox/lib/lexicon.js","picovox/lib/lf.js","picovox/lib/model.js","picovox/lib/models/g2pModel.js","picovox/lib/models/voiceModel.js","picovox/lib/package.js","picovox/lib/params.js","picovox/lib/phonemes.js","picovox/lib/render.js","picovox/lib/rng.js","picovox/lib/sentences.js","picovox/lib/style.js","picovox/lib/synthesis.js","picovox/lib/tokens.js","picovox/lib/transforms.js","picovox/lib/wav.js","picovox/package.json"];
 const cacheName = `picoshelf-${version}`;
 
