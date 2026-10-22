@@ -16,8 +16,8 @@ import process from 'node:process';
 
 export const root = fileURLToPath(new URL('..', import.meta.url));
 
-// The decisions' cache directory
-export const cacheDir = join(root, 'cache', 'catalog');
+// The catalog builder's cache directory - the pages and the decisions (PICOSHELF_CACHE sets another - the tests')
+export const cacheDir = process.env.PICOSHELF_CACHE ?? join(root, 'cache', 'catalog');
 
 // The default decision model
 export const decisionModel = 'kev:9b-nvfp4';
@@ -119,7 +119,8 @@ function writeCache(path, cache) {
 }
 
 
-// The catalog's books
+// The catalog's books (PICOSHELF_CATALOG reads another catalog file - the tests')
 export function catalogBooks() {
-    return JSON.parse(readFileSync(join(root, 'data', 'catalog.json'), 'utf-8')).books;
+    const catalogPath = process.env.PICOSHELF_CATALOG ?? join(root, 'data', 'catalog.json');
+    return JSON.parse(readFileSync(catalogPath, 'utf-8')).books;
 }

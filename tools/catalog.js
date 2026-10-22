@@ -24,13 +24,13 @@ import {castBooks, castModel} from './voicecast.js';
 import {dirname, join} from 'node:path';
 import {existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync} from 'node:fs';
 import {JSDOM} from 'jsdom';
+import {cacheDir} from './decide.js';
 import {fileURLToPath} from 'node:url';
 import {normalizeText} from '../lib/catalog.js';
 import process from 'node:process';
 
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const cacheDir = join(root, 'cache', 'catalog');
 const userAgent = 'picoshelf-catalog/1.0 (+https://github.com/craigahobbs/picoshelf)';
 
 const seURL = 'https://standardebooks.org';
@@ -67,7 +67,7 @@ const subjectCount = 8;
 
 
 // Parse the command line
-function parseArgs(args) {
+export function parseArgs(args) {
     const options = {
         'gutenberg': 1000, 'standardebooks': Infinity, 'maxAge': 30, 'cacheOnly': false, 'output': join(root, 'data', 'catalog.json'),
         'voiceModel': castModel
@@ -106,10 +106,26 @@ function parseArgs(args) {
 
 const startTime = Date.now();
 
+// The builder's output and waits - the tests replace them (mock.method)
+export const services = {
+    // Write output text
+    write(text) {
+        process.stdout.write(text);
+    },
+
+    // Sleep for milliseconds
+    sleep(milliseconds) {
+        return new Promise((resolve) => {
+            setTimeout(resolve, milliseconds);
+        });
+    }
+};
+
+
 // Write a progress line with the elapsed time
-function log(message) {
+export function log(message) {
     const seconds = Math.round((Date.now() - startTime) / 1000);
-    process.stdout.write(`[${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}] ${message}\n`);
+    services.write(`[${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}] ${message}\n`);
 }
 
 
@@ -120,14 +136,6 @@ function log(message) {
 
 const hostNextTimes = new Map();
 
-// Sleep for milliseconds
-function sleep(milliseconds) {
-    return new Promise((resolve) => {
-        setTimeout(resolve, milliseconds);
-    });
-}
-
-
 // Wait for a host's turn
 async function throttle(url) {
     const {host} = new URL(url);
@@ -135,15 +143,17 @@ async function throttle(url) {
     const nextTime = Math.max(now, hostNextTimes.get(host) ?? 0);
     hostNextTimes.set(host, nextTime + (hostIntervals[host] ?? 500));
     if (nextTime > now) {
-        await sleep(nextTime - now);
+        await services.sleep(nextTime - now);
     }
 }
 
 
 // Fetch a URL - network errors, timeouts, 429s, and 5xx responses are retried with exponential backoff (or the
 // response's Retry-After)
-async function fetchRetry(url, {method = 'GET', headers = {}, timeout = 60000, attempts = 6} = {}) {
-    for (let attempt = 1; ; attempt++) {
+export async function fetchRetry(url, {method = 'GET', headers = {}, timeout = 60000, attempts = 6} = {}) {
+    // (Not "for (let attempt = 1; ; attempt++)" - V8's coverage counts that loop's unreachable end as an uncovered branch)
+    let attempt = 1;
+    for (;; attempt++) {
         await throttle(url);
         let retryAfter = 2 ** attempt;
         try {
@@ -167,16 +177,15 @@ async function fetchRetry(url, {method = 'GET', headers = {}, timeout = 60000, a
             }
             log(`  ${url}: ${error.cause?.code ?? error.name} - retrying in ${retryAfter} s`);
         }
-        await sleep(retryAfter * 1000);
+        await services.sleep(retryAfter * 1000);
     }
 }
 
 
 // Fetch a URL's text, cached in a file under cache/catalog/ - null for a 404 (cached as well). Cached files older than
-// maxAge days are refetched (Infinity keeps them forever). With --cache-only, any cached file is used and an
-// uncached URL is null.
-let cacheOnly = false;
-async function fetchCached(url, cacheName, maxAge, timeout = 60000) {
+// options.maxAge days are refetched (Infinity keeps them forever). With options.cacheOnly (--cache-only), any cached
+// file is used and an uncached URL is null.
+export async function fetchCached(url, cacheName, {maxAge, cacheOnly}, timeout = 60000) {
     const cachePath = join(cacheDir, cacheName);
     const missingPath = `${cachePath}.404`;
     for (const path of [cachePath, missingPath]) {
@@ -203,7 +212,7 @@ async function fetchCached(url, cacheName, maxAge, timeout = 60000) {
 
 
 // Write a file, creating its directory, so an interrupted write never leaves a partial file
-function writeFileAtomic(path, text) {
+export function writeFileAtomic(path, text) {
     mkdirSync(dirname(path), {'recursive': true});
     writeFileSync(`${path}.tmp`, text);
     renameSync(`${path}.tmp`, path);
@@ -211,7 +220,7 @@ function writeFileAtomic(path, text) {
 
 
 // Read a JSON cache file (an empty object if there isn't one)
-function readJSONCache(cacheName) {
+export function readJSONCache(cacheName) {
     const path = join(cacheDir, cacheName);
     return existsSync(path) ? JSON.parse(readFileSync(path, 'utf-8')) : {};
 }
@@ -219,7 +228,7 @@ function readJSONCache(cacheName) {
 
 // Parse HTML into a document - with one window's DOMParser (a JSDOM window per page holds gigabytes over a crawl)
 const domParser = new (new JSDOM('').window.DOMParser)();
-function parseHTML(html) {
+export function parseHTML(html) {
     return domParser.parseFromString(html, 'text/html');
 }
 
@@ -230,14 +239,14 @@ function parseHTML(html) {
 
 
 // Collapse whitespace
-function collapseSpace(text) {
+export function collapseSpace(text) {
     return text.replace(/\s+/g, ' ').trim();
 }
 
 
 // A description trimmed to at most descriptionLength characters, at a sentence end if there is one past a third of
 // the limit, else at a word break with an ellipsis
-function trimDescription(text) {
+export function trimDescription(text) {
     const description = collapseSpace(text);
     if (description.length <= descriptionLength) {
         return description;
@@ -252,7 +261,7 @@ function trimDescription(text) {
 
 
 // A subject list - cleaned, deduplicated (normalized), at most subjectCount
-function uniqueSubjects(subjects) {
+export function uniqueSubjects(subjects) {
     const seen = new Set();
     const result = [];
     for (const subject of subjects.map(collapseSpace)) {
@@ -268,14 +277,14 @@ function uniqueSubjects(subjects) {
 
 // A key for matching the same work across sources - the normalized title without a leading article or word breaks
 // ("The Case-Book of Sherlock Holmes" matches "The Casebook of Sherlock Holmes")
-function titleKey(title) {
+export function titleKey(title) {
     return normalizeText(title).replace(/^(?:the|a|an) /, '').replace(/ /g, '');
 }
 
 
 // The surname keys of a display author list ('Mary Shelley, Percy Bysshe Shelley') - each name's last word, first
 // four letters, so spelling variants of transliterated names match (Dostoevsky, Dostoyevsky); anonymous is ''
-function surnameKeys(author) {
+export function surnameKeys(author) {
     const keys = author.split(/\s*,\s*/).map((name) => normalizeText(name).split(' ').pop().slice(0, 4)).filter((key) => key !== '');
     return keys.length > 0 ? keys : [''];
 }
@@ -291,13 +300,13 @@ const seIdPattern = /^\/ebooks(\/[a-z0-9][a-z0-9_-]*){2,4}$/;
 
 
 // Every Standard Ebooks book, by popularity - from the catalog listing pages and each book's page
-async function standardEbooks(options) {
+export async function standardEbooks(options) {
     // The listing pages, in popularity order
     const listed = [];
     const listedIds = new Set();
     for (let page = 1; listed.length < options.standardebooks; page++) {
         const url = `${seURL}/ebooks?sort=popularity&per-page=48&page=${page}`;
-        const html = await fetchCached(url, `standardebooks/list-${page}.html`, options.maxAge);
+        const html = await fetchCached(url, `standardebooks/list-${page}.html`, options);
         if (html === null) {
             break;
         }
@@ -334,7 +343,7 @@ async function standardEbooks(options) {
     let missing = 0;
     for (const [index, item] of listed.entries()) {
         const cacheName = `standardebooks/book${item.id.slice('/ebooks'.length).replace(/\//g, '_')}.html`;
-        const html = await fetchCached(`${seURL}${item.id}`, cacheName, options.maxAge);
+        const html = await fetchCached(`${seURL}${item.id}`, cacheName, options);
         const book = html === null ? null : standardEbook(item, parseHTML(html));
         if (book === null) {
             log(`  Standard Ebooks: ${item.id} - no book page or EPUB download`);
@@ -353,7 +362,7 @@ async function standardEbooks(options) {
 
 
 // A Standard Ebooks catalog book from its listing item and book page, or null if it has no EPUB download
-function standardEbook(item, doc) {
+export function standardEbook(item, doc) {
     const article = doc.querySelector('article[typeof="schema:Book"]') ?? doc;
     const meta = (property) => article.querySelector(`meta[property="schema:${property}"]`)?.getAttribute('content') ?? null;
 
@@ -399,11 +408,11 @@ function standardEbook(item, doc) {
 
 
 // The top Gutenberg books by downloads from Gutendex - English texts that aren't under copyright
-async function gutendexBooks(options) {
+export async function gutendexBooks(options) {
     const results = [];
     for (let page = 1; results.length < options.gutenberg; page++) {
         const url = `${gutendexURL}?languages=en&mime_type=text%2Fplain&page=${page}`;
-        const json = await fetchCached(url, `gutendex/page-${page}.json`, options.maxAge, 180000);
+        const json = await fetchCached(url, `gutendex/page-${page}.json`, options, 180000);
         if (json === null) {
             break;
         }
@@ -425,7 +434,7 @@ async function gutendexBooks(options) {
 // A Gutendex title as a title and subtitle - one line, split at the first colon, semicolon, or dash outside
 // parentheses, without a generic subtitle ("A Novel", "Complete"), and a long subtitle shortened
 const subtitleLength = 100;
-function gutenbergTitle(rawTitle) {
+export function gutenbergTitle(rawTitle) {
     const oneLine = rawTitle.replace(/\s*[\r\n]+\s*/g, (match, offset) => (/[;:,]$/.test(rawTitle.slice(0, offset)) ? ' ' : ': ')).trim();
     const separator = [...oneLine.matchAll(/\s*(?:[:;]|\s[—–]\s|\s-{1,2}\s|—|--)\s*/g)].find((match) => {
         const prefix = oneLine.slice(0, match.index);
@@ -451,7 +460,7 @@ const smallWords = new Set([
     'a', 'an', 'and', 'as', 'at', 'but', 'by', 'de', 'du', 'for', 'from', 'in', 'into', 'la', 'le', 'nor', 'of', 'on', 'or',
     'the', 'to', 'van', 'von', 'with'
 ]);
-function titleCase(text) {
+export function titleCase(text) {
     const capitalize = (word) => `${word.charAt(0).toUpperCase()}${word.slice(1)}`;
     const words = text.split(' ');
     const isSmall = (word) => smallWords.has(word.replace(/\W/g, '')) || /^d['’]/.test(word);
@@ -466,7 +475,7 @@ function titleCase(text) {
 
 // A Gutendex author name ('Last, First (Full Names), suffix') in display order ('First Last')
 const epithetRegex = /^(?:Emperor|Empress|King|Queen|Saint|St\.|Pope|Prince|Princess|Duke|Earl|Lord|Lady|Baron|Count|Countess)\b/;
-function gutenbergAuthor(name) {
+export function gutenbergAuthor(name) {
     const parts = name.replace(/\s*\([^)]*\)/g, '').split(/\s*,\s*/).filter((part) => part !== '');
     if (parts.length < 2) {
         return parts.join('');
@@ -486,7 +495,7 @@ function gutenbergAuthor(name) {
 
 // A Gutendex summary as a description - without the "(This is an automatically generated summary.)" note, and
 // without the leading '"Title" by Author is' phrase (the title and author are shown with it)
-function gutenbergDescription(summary) {
+export function gutenbergDescription(summary) {
     let description = collapseSpace(summary).replace(/\s*\(This is an automatically generated summary\.?\)\s*$/i, '');
     const match = description.match(/^["“][^"”]{1,300}["”],?\s+(?:\([^)]{0,100}\)\s+)?(?:by\s+.{1,200}?\s+)?(?:is|are)\s+(an?|the)\s+(\S)/);
     if (match) {
@@ -498,7 +507,7 @@ function gutenbergDescription(summary) {
 
 // Gutenberg subjects - the bookshelf categories, then the Library of Congress subjects (their topic, without
 // subdivisions; characters as "First Last"), with "Fiction" for fiction
-function gutenbergSubjects(result) {
+export function gutenbergSubjects(result) {
     const shelves = result.bookshelves
         .filter((shelf) => /^(?:Category|Browsing):\s/.test(shelf))
         .map((shelf) => shelf.replace(/^[^:]+:\s*/, ''));
@@ -517,14 +526,14 @@ function gutenbergSubjects(result) {
 
 
 // Approximate words from a Gutenberg plain-text file's size - about 5.8 bytes a word, less the license (about 18 KB)
-function gutenbergWords(bytes) {
+export function gutenbergWords(bytes) {
     return bytes > 0 ? Math.max(100, Math.round((bytes - 18000) / 5.8 / 100) * 100) : null;
 }
 
 
 // The GITenberg repository names by Gutenberg id - from the gitberg project's published list
-async function gitenbergRepositories(maxAge) {
-    const tsv = await fetchCached(gitenbergListURL, 'gitenberg/GITenberg_repo_list.tsv', maxAge, 300000);
+export async function gitenbergRepositories(options) {
+    const tsv = await fetchCached(gitenbergListURL, 'gitenberg/GITenberg_repo_list.tsv', options, 300000);
     const repositories = new Map();
     for (const line of (tsv ?? '').split('\n')) {
         const [id, name] = line.trim().split('\t');
@@ -538,7 +547,7 @@ async function gitenbergRepositories(maxAge) {
 
 // Find a GITenberg repository with the GitHub search API, honoring its rate limit - the name or null (cached)
 const searchCacheName = 'gitenberg/search.json';
-async function searchRepository(id, searchCache) {
+export async function searchRepository(id, searchCache) {
     if (searchCache.has(id)) {
         return searchCache.get(id);
     }
@@ -554,7 +563,7 @@ async function searchRepository(id, searchCache) {
             const wait = Math.max(1000, resetTime - Date.now() + 1000);
             log(`  GitHub search rate limit - waiting ${Math.round(wait / 1000)} s`);
             await response.body?.cancel();
-            await sleep(wait);
+            await services.sleep(wait);
             continue;
         }
         if (!response.ok) {
@@ -570,7 +579,7 @@ async function searchRepository(id, searchCache) {
             const wait = Number(response.headers.get('X-RateLimit-Reset')) * 1000 - Date.now() + 1000;
             if (wait > 0) {
                 log(`  GitHub search rate limit - waiting ${Math.round(wait / 1000)} s`);
-                await sleep(wait);
+                await services.sleep(wait);
             }
         }
         return name;
@@ -580,7 +589,7 @@ async function searchRepository(id, searchCache) {
 
 // Resolve a Gutenberg book's text in its GITenberg repository - the UTF-8 file (<id>-0.txt), the plain file (<id>.txt,
 // UTF-8 if it decodes as such, else Windows-1252), or the Latin-1 file (<id>-8.txt) - with HEAD requests
-async function resolveText(id, repository) {
+export async function resolveText(id, repository) {
     for (const file of [`${id}-0.txt`, `${id}.txt`, `${id}-8.txt`]) {
         const url = `${gitenbergRawURL}${repository}/master/${file}`;
         const response = await fetchRetry(url, {'method': 'HEAD', 'headers': {'Accept-Encoding': 'identity'}});
@@ -615,14 +624,14 @@ const referenceSubjects = [
 ];
 const referenceTitleRegex = new RegExp(`\\b(?:${referenceTitleWords.join('|')})\\b`, 'i');
 const referenceSubjectRegex = new RegExp(`^(?:${referenceSubjects.join('|')})\\b`, 'i');
-function isReferenceWork(result) {
+export function isReferenceWork(result) {
     return referenceTitleRegex.test(result.title) ||
         result.subjects.some((subject) => subject.split(' -- ').some((part) => referenceSubjectRegex.test(part.trim())));
 }
 
 
 // The top Gutenberg books, without Standard Ebooks duplicates or reference works, with texts in GITenberg
-async function gutenbergBooks(options, seBooks) {
+export async function gutenbergBooks(options, seBooks) {
     const results = await gutendexBooks(options);
 
     // Standard Ebooks' works, by title and author surname
@@ -658,7 +667,7 @@ async function gutenbergBooks(options, seBooks) {
         `${gutenbergDuplicates} duplicate editions, ${referenceWorks} reference works)`);
 
     // Resolve the texts - results are cached (GITenberg is a static mirror; unresolved books are retried after maxAge)
-    const repositories = await gitenbergRepositories(options.maxAge);
+    const repositories = await gitenbergRepositories(options);
     const maxListedId = Math.max(...[...repositories.keys()].map(Number));
     const textCacheName = 'gitenberg/texts.json';
     const textCache = readJSONCache(textCacheName);
@@ -669,11 +678,11 @@ async function gutenbergBooks(options, seBooks) {
     for (const [index, {result, title, subtitle, author}] of candidates.entries()) {
         const id = String(result.id);
         let cached = textCache[id];
-        if (!cached && cacheOnly) {
+        if (!cached && options.cacheOnly) {
             pending++;
             continue;
         }
-        if (!cached || (cached.text === null && !cacheOnly && (Date.now() - cached.checked) > options.maxAge * 86400000)) {
+        if (!cached || (cached.text === null && !options.cacheOnly && (Date.now() - cached.checked) > options.maxAge * 86400000)) {
             let repository = repositories.get(id) ?? null;
             if (repository === null && Number(id) <= maxListedId) {
                 repository = await searchRepository(id, searchCache);
@@ -715,17 +724,15 @@ async function gutenbergBooks(options, seBooks) {
 
 
 // The catalog JSON - one book per line, so changes diff well
-function catalogJSON(catalog) {
+export function catalogJSON(catalog) {
     const {books, ...header} = catalog;
     const headerJSON = JSON.stringify(header, null, 4).replace(/\n\}$/, '');
     return `${headerJSON},\n    "books": [\n${books.map((book) => `        ${JSON.stringify(book)}`).join(',\n')}\n    ]\n}\n`;
 }
 
 
-// Build the catalog
-async function main() {
-    const options = parseArgs(process.argv.slice(2));
-    ({cacheOnly} = options);
+// Build the catalog with options (parseArgs's)
+export async function buildCatalog(options) {
     const seBooks = await standardEbooks(options);
     const gutenberg = options.gutenberg > 0 ? await gutenbergBooks(options, seBooks) : [];
 
@@ -750,7 +757,15 @@ async function main() {
 }
 
 
-main().catch((error) => {
-    process.stderr.write(`error: ${error.message}\n`);
-    process.exitCode = 1;
-});
+// The command line
+async function main() {
+    await buildCatalog(parseArgs(process.argv.slice(2)));
+}
+
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+    main().catch((error) => {
+        process.stderr.write(`error: ${error.message}\n`);
+        process.exitCode = 1;
+    });
+}

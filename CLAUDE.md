@@ -14,6 +14,7 @@ Local Makefile overrides:
 - `GHPAGES_SRC` - `build/app/`
 - `USE_JSDOM` - jsdom is a development dependency (the app's tests, and `tools/catalog.js`)
 - `ESLINT_ARGS` - also `tools/`
+- `C8_ARGS` - also `tools/` (100% coverage of the catalog builder too)
 - `commit` also depends on `app`
 - `superclean` also removes `cache/` (the catalog builder's cached pages and Ollama decisions - hours to rebuild)
 
@@ -31,5 +32,7 @@ Package-specific targets:
   (the synthesis Web Workers), `store.js` and `bookcache.js` (browser storage), the book code (`catalog.js`, `zip.js`,
   `epub.js`, `gutenberg.js`), and the book sources (`lib/sources/`). PicoVox is imported bare (`picovox/lib/...`), so
   the code runs under Node's tests as is and `make app` makes the imports relative for the static site.
-- `tools/` - the catalog builder (Node; linted, not covered).
+- `tools/` - the catalog builder (Node). Its tests (`test/testTools*.js`) never reach the network or Ollama: they set
+  `PICOSHELF_CACHE` (the cache directory) and `PICOSHELF_CATALOG` (the catalog `tools/decide.js` reads) to temporary
+  files, fake `fetch` in-process, and run the CLIs as child processes against a local fake Ollama (`OLLAMA_HOST`).
 - `test/` - `node --test` unit tests; jsdom stands in for the browser.

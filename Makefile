@@ -21,8 +21,9 @@ USE_JSDOM := 1
 include Makefile.base
 
 
-# The catalog tools are linted too
+# The catalog tools are linted and covered too
 ESLINT_ARGS := $(ESLINT_ARGS) tools/
+C8_ARGS := $(C8_ARGS) --src tools/
 
 
 clean:

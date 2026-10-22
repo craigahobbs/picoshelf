@@ -40,7 +40,7 @@ PicoShelf is a [javascript-build](https://github.com/craigahobbs/javascript-buil
   `wikipedia.js` - live, from Wikipedia's CORS-enabled APIs: today's featured and most-read articles, search, and an
   article's plain text, its sections the chapters, read by default by Michael - of the best-measured voices on
   encyclopedia prose; CC BY-SA, credited on each article)
-- `test/` - the unit tests (`node --test`, with jsdom for the browser; 100% coverage)
+- `test/` - the unit tests of the app and the tools (`node --test`, with jsdom for the browser; 100% coverage)
 - `data/catalog.json` - the book catalog, each book with its narrator's voice and its genres (`make catalog`)
 - `tools/` - the catalog builder (`catalog.js` - every Standard Ebooks book and the most-downloaded Project Gutenberg
   books, its pages cached under `cache/catalog/`), and the decisions a local Ollama decision model makes about each
