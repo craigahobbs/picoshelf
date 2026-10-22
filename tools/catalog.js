@@ -1,13 +1,16 @@
-// Build the book catalog, data/catalog.json - every Standard Ebooks book, and Project Gutenberg's books balanced by genre:
-// each genre's share of the catalog by the square root of its popularity (its candidates' downloads), at least
-// genreFloor books, filled with its most-downloaded books whose plain text is in the GITenberg mirror on GitHub and
-// passes the quality rules (tools/quality.js). The app fetches texts from their sources with CORS at play time, so the
-// catalog holds only metadata and each book's text URL.
+// Build the book catalog, data/catalog.json - every Standard Ebooks book, and Project Gutenberg's books: the most popular
+// first, whatever their genres, then balanced by genre - each genre's share of the catalog by the square root of its
+// popularity (its candidates' downloads), at least genreFloor books, filled with its most-downloaded books. Each
+// Gutenberg book's plain text is in the GITenberg mirror on GitHub and passes the quality rules (tools/quality.js). The
+// app fetches texts from their sources with CORS at play time, so the catalog holds only metadata and each book's text
+// URL.
 //
-// node tools/catalog.js [--books <count>] [--gutenberg <count>] [--standardebooks <count>] [--max-age <days>]
-//                       [--page-max-age <days>] [--cache-only] [--voice-model <model>] [-o <file>]
+// node tools/catalog.js [--books <count>] [--popular <count>] [--gutenberg <count>] [--standardebooks <count>]
+//                       [--max-age <days>] [--page-max-age <days>] [--cache-only] [--voice-model <model>] [-o <file>]
 //
 //   --books <count>           the catalog's size - its Standard Ebooks books and the Gutenberg books (default 5000)
+//   --popular <count>         the top Gutenberg candidates (by downloads) chosen first, whatever their genres (default
+//                             1000)
 //   --gutenberg <count>       the number of top Gutenberg books (by downloads) whose genres are decided - the candidates
 //                             (default 8000)
 //   --standardebooks <count>  only the most popular Standard Ebooks books (default all)
@@ -82,13 +85,16 @@ const subjectCount = 8;
 // Parse the command line
 export function parseArgs(args) {
     const options = {
-        'books': 5000, 'gutenberg': 8000, 'standardebooks': Infinity, 'maxAge': 30, 'pageMaxAge': 365, 'cacheOnly': false,
+        'books': 5000, 'popular': 1000, 'gutenberg': 8000, 'standardebooks': Infinity, 'maxAge': 30, 'pageMaxAge': 365,
+        'cacheOnly': false,
         'output': join(root, 'data', 'catalog.json'), 'voiceModel': decisionModel
     };
     for (let ix = 0; ix < args.length; ix++) {
         const arg = args[ix];
         if (arg === '--books') {
             options.books = Number(args[++ix]);
+        } else if (arg === '--popular') {
+            options.popular = Number(args[++ix]);
         } else if (arg === '--gutenberg') {
             options.gutenberg = Number(args[++ix]);
         } else if (arg === '--standardebooks') {
@@ -107,7 +113,7 @@ export function parseArgs(args) {
             throw new Error(`Unknown argument "${arg}"`);
         }
     }
-    for (const name of ['books', 'gutenberg', 'standardebooks', 'maxAge', 'pageMaxAge']) {
+    for (const name of ['books', 'popular', 'gutenberg', 'standardebooks', 'maxAge', 'pageMaxAge']) {
         if (Number.isNaN(options[name]) || options[name] < 0) {
             throw new Error(`Invalid ${name} "${options[name]}"`);
         }
@@ -748,10 +754,9 @@ export async function chooseGutenberg(seBooks, candidates, genres, repositories,
     for (const book of candidates) {
         weights[primary(book)] += book.downloads;
     }
-    const quotas = genreQuotas(weights, seCounts, options.books, genreFloor);
 
-    // The texts' checks - at most textConcurrency at once (each book's once - its genre's candidates, then those not
-    // yet checked)
+    // The texts' checks - at most textConcurrency at once (each book's once - the popular candidates, its genre's other
+    // candidates, then those not yet checked)
     const textCacheName = 'gitenberg/quality.json';
     const textCache = readJSONCache(textCacheName);
     const limit = taskLimiter(textConcurrency);
@@ -773,7 +778,7 @@ export async function chooseGutenberg(seBooks, candidates, genres, repositories,
 
     // Accept the passing books of a list in order, up to count - checked count at a time
     const chosen = new Map();
-    const stats = Object.fromEntries(Object.keys(quotas).map((genre) => [genre, {'chosen': 0, 'tried': 0, 'reasons': {}}]));
+    const stats = Object.fromEntries(Object.keys(weights).map((genre) => [genre, {'chosen': 0, 'tried': 0, 'reasons': {}}]));
     const accept = async (books, count) => {
         let accepted = 0;
         for (let next = 0; accepted < count && next < books.length;) {
@@ -792,8 +797,18 @@ export async function chooseGutenberg(seBooks, candidates, genres, repositories,
             }
         }
     };
+    // The most popular first - the top options.popular candidates whose texts pass (no more than the catalog has room
+    // for), whatever their genres - then the genres' quotas, each genre's Standard Ebooks and popular books fixed (a genre
+    // they fill keeps them, and the others share the rest), each filled from its other candidates
+    const popular = Math.min(options.popular, candidates.length, Math.max(0, options.books - seBooks.length));
+    await accept(candidates.slice(0, popular), popular);
+    log(`Gutenberg: ${chosen.size} popular books (of the top ${popular} candidates)`);
+    const fixed = Object.fromEntries(Object.entries(stats).map(([genre, {chosen: popularCount}]) => [
+        genre, (seCounts[genre] ?? 0) + popularCount
+    ]));
+    const quotas = genreQuotas(weights, fixed, options.books, genreFloor);
     await Promise.all(Object.keys(quotas).map((genre) => accept(
-        candidates.filter((book) => primary(book) === genre), quotas[genre] - (seCounts[genre] ?? 0)
+        candidates.filter((book) => primary(book) === genre && !checks.has(book.id)), quotas[genre] - fixed[genre]
     )));
     await accept(candidates.filter((book) => !checks.has(book.id)), options.books - seBooks.length - chosen.size);
     writeFileAtomic(join(cacheDir, textCacheName), JSON.stringify(textCache));

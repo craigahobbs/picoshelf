@@ -25,6 +25,7 @@ const {qualityVersion} = await import('../tools/quality.js');
 test('parseArgs, defaults', () => {
     const options = parseArgs([]);
     assert.equal(options.books, 5000);
+    assert.equal(options.popular, 1000);
     assert.equal(options.gutenberg, 8000);
     assert.equal(options.standardebooks, Infinity);
     assert.equal(options.maxAge, 30);
@@ -38,12 +39,12 @@ test('parseArgs, defaults', () => {
 test('parseArgs, arguments', () => {
     assert.deepEqual(
         parseArgs([
-            '--books', '100', '--gutenberg', '10', '--standardebooks', '5', '--max-age', '0', '--page-max-age', '7', '--cache-only',
-            '--voice-model', 'test:1b', '-o', 'out.json'
+            '--books', '100', '--popular', '20', '--gutenberg', '10', '--standardebooks', '5', '--max-age', '0', '--page-max-age', '7',
+            '--cache-only', '--voice-model', 'test:1b', '-o', 'out.json'
         ]),
         {
-            'books': 100, 'gutenberg': 10, 'standardebooks': 5, 'maxAge': 0, 'pageMaxAge': 7, 'cacheOnly': true, 'output': 'out.json',
-            'voiceModel': 'test:1b'
+            'books': 100, 'popular': 20, 'gutenberg': 10, 'standardebooks': 5, 'maxAge': 0, 'pageMaxAge': 7, 'cacheOnly': true,
+            'output': 'out.json', 'voiceModel': 'test:1b'
         }
     );
 });
@@ -52,6 +53,7 @@ test('parseArgs, arguments', () => {
 test('parseArgs, errors', () => {
     assert.throws(() => parseArgs(['--bogus']), {'message': 'Unknown argument "--bogus"'});
     assert.throws(() => parseArgs(['--books', 'all']), {'message': 'Invalid books "NaN"'});
+    assert.throws(() => parseArgs(['--popular', '-5']), {'message': 'Invalid popular "-5"'});
     assert.throws(() => parseArgs(['--gutenberg', 'many']), {'message': 'Invalid gutenberg "NaN"'});
     assert.throws(() => parseArgs(['--standardebooks', '-1']), {'message': 'Invalid standardebooks "-1"'});
     assert.throws(() => parseArgs(['--max-age']), {'message': 'Invalid maxAge "NaN"'});

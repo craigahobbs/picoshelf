@@ -460,7 +460,8 @@ test('chooseGutenberg', async () => {
     };
     let books;
     const {calls, output} = await withSite(site, async () => {
-        books = await chooseGutenberg(seBooks, candidates, genres, repositories, {'books': 100, 'maxAge': 30, 'cacheOnly': false});
+        const options = {'books': 100, 'popular': 0, 'maxAge': 30, 'cacheOnly': false};
+        books = await chooseGutenberg(seBooks, candidates, genres, repositories, options);
     });
 
     // The books - general fiction's 27 passing texts and 48 mysteries' (the quota's 40 - 205's replaced by 241 - and 8
@@ -503,9 +504,46 @@ test('chooseGutenberg', async () => {
         'fiction': '  fiction: 29 books of 75 - 2 Standard Ebooks, 27 Gutenberg of 30 tried (2 too short, 1 notes)',
         'mystery': '  mystery: 48 books of 40 - 0 Standard Ebooks, 48 Gutenberg of 50 tried (1 notes, 1 no text file)'
     };
-    assert.deepEqual(
-        output, genreKeys.map((genre) => coverage[genre] ?? `  ${genre}: 0 books of 40 - 0 Standard Ebooks, 0 Gutenberg of 0 tried`)
-    );
+    assert.deepEqual(output, [
+        'Gutenberg: 0 popular books (of the top 0 candidates)',
+        ...genreKeys.map((genre) => coverage[genre] ?? `  ${genre}: 0 books of 40 - 0 Standard Ebooks, 0 Gutenberg of 0 tried`)
+    ]);
+});
+
+
+test('chooseGutenberg, the most popular first', async () => {
+    resetCache();
+
+    // Ten general fiction candidates (ids 301-310, the most downloaded) and sixty mysteries (ids 401-460)
+    const fiction = Array.from({'length': 10}, (unused, ix) => gutenbergCandidate(301 + ix, `Fiction ${ix + 1}`, 'A Writer', 1000));
+    const mysteries = Array.from({'length': 60}, (unused, ix) => gutenbergCandidate(401 + ix, `Mystery ${ix + 1}`, 'A Writer', 1));
+    const candidates = [...fiction, ...mysteries];
+    const genres = bookGenreKeys(candidates, (book) => (book.id.startsWith('3') ? 'fiction' : 'mystery'));
+    const repositories = new Map(candidates.map((book) => [book.id, `Book_${book.id}`]));
+    // (each text the UTF-8 file, the first tried)
+    const site = () => new Response(gutenbergFile());
+
+    // The top three first - checked before any genre's, then the genres' quotas
+    let books;
+    const first = await withSite(site, async () => {
+        books = await chooseGutenberg([], candidates, genres, repositories, {'books': 200, 'popular': 3, 'maxAge': 30, 'cacheOnly': false});
+    });
+    const {calls} = first;
+    let {output} = first;
+    assert.deepEqual(calls.slice(0, 3).map(([url]) => url), [
+        rawURL('Book_301', '301-0.txt'), rawURL('Book_302', '302-0.txt'), rawURL('Book_303', '303-0.txt')
+    ]);
+    assert.equal(output[0], 'Gutenberg: 3 popular books (of the top 3 candidates)');
+    assert.equal(books.length, 70);
+
+    // No more popular books than the catalog has room for
+    resetCache();
+    ({output} = await withSite(site, async () => {
+        const options = {'books': 2, 'popular': 1000, 'maxAge': 30, 'cacheOnly': false};
+        books = await chooseGutenberg([], candidates, genres, repositories, options);
+    }));
+    assert.equal(output[0], 'Gutenberg: 2 popular books (of the top 2 candidates)');
+    assert.deepEqual(books.slice(0, 2).map((book) => book.id), ['301', '302']);
 });
 
 
@@ -522,14 +560,14 @@ test('chooseGutenberg, cache-only', async () => {
     writeCache('gitenberg/quality.json', JSON.stringify(textCache));
     let books;
     const {calls, output} = await withSite({}, async () => {
-        books = await chooseGutenberg([], candidates, genres, repositories, {'books': 300, 'maxAge': 30, 'cacheOnly': true});
+        books = await chooseGutenberg([], candidates, genres, repositories, {'books': 300, 'popular': 0, 'maxAge': 30, 'cacheOnly': true});
     });
     assert.equal(books.length, 200);
     assert.deepEqual(books.at(-1).text, {'url': rawURL('Book_200', '200-0.txt'), 'format': 'gutenberg-text', 'encoding': 'utf-8'});
     assert.deepEqual(calls, []);
-    assert.equal(output[0], 'Gutenberg: 200 texts checked');
+    assert.deepEqual(output.slice(0, 2), ['Gutenberg: 0 popular books (of the top 0 candidates)', 'Gutenberg: 200 texts checked']);
     assert.equal(
-        output[genreKeys.indexOf('fiction') + 1],
+        output[genreKeys.indexOf('fiction') + 2],
         '  fiction: 200 books of 300 - 0 Standard Ebooks, 200 Gutenberg of 201 tried (1 not downloaded)'
     );
     assert.deepEqual(readJSONCache('gitenberg/quality.json'), textCache);
@@ -591,7 +629,7 @@ test('buildCatalog', async () => {
         'http://ollama.test/v1/systemone': (options) => ollama('/v1/systemone', JSON.parse(options.body))
     };
     const options = {
-        'books': 10, 'gutenberg': 10, 'standardebooks': Infinity, 'maxAge': 30, 'pageMaxAge': 365, 'cacheOnly': false, output,
+        'books': 10, 'popular': 0, 'gutenberg': 10, 'standardebooks': Infinity, 'maxAge': 30, 'pageMaxAge': 365, 'cacheOnly': false, output,
         'voiceModel': 'test:1b'
     };
     const {calls, output: lines} = await withSite(site, async () => {
@@ -647,6 +685,7 @@ test('buildCatalog', async () => {
     assert.deepEqual(lines.filter((line) => /^(?:Gutenberg| {2}biography)/.test(line)), [
         'Gutenberg: 4 English texts in its catalog',
         'Gutenberg: 3 candidates (0 not in GITenberg, 1 Standard Ebooks duplicates, 0 duplicate editions, 0 reference works)',
+        'Gutenberg: 0 popular books (of the top 0 candidates)',
         '  biography: 3 books of 40 - 1 Standard Ebooks, 2 Gutenberg of 3 tried (1 too short)'
     ]);
     assert.match(lines.at(-1), /catalog\.json: 1 Standard Ebooks and 2 Gutenberg books, \d+ bytes$/);
@@ -701,6 +740,8 @@ test('catalog.js, command line', async () => {
         'Standard Ebooks: 1 books (0 without a book page or EPUB)',
         'Gutenberg: 4 English texts in its catalog',
         'Gutenberg: 3 candidates (0 not in GITenberg, 1 Standard Ebooks duplicates, 0 duplicate editions, 0 reference works)',
+        // (the default 1,000 popular - the three candidates, the catalog's room for four)
+        'Gutenberg: 1 popular books (of the top 3 candidates)',
         '  biography: 2 books of 40 - 1 Standard Ebooks, 1 Gutenberg of 3 tried (1 too short, 1 not downloaded)'
     ]);
     assert.match(lines.at(-1), /catalog\.json: 1 Standard Ebooks and 1 Gutenberg books, \d+ bytes$/);
