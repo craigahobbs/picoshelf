@@ -15,12 +15,14 @@ processing the files.
 
 A book's address is its link, and it follows the listener's section - share it from the player's share button, or
 copy it from the address bar. The link's hash parameters (key=value pairs joined by "&", URL-encoded, as
-[MarkdownUp](https://github.com/craigahobbs/markdown-up)'s) name the book and, optionally, the section:
+[MarkdownUp](https://github.com/craigahobbs/markdown-up)'s) name the book and, optionally, the section and the place:
 
 - `book` - the book's id, stable across catalog builds: `pg` and its Project Gutenberg ebook number (`pg1342`),
   `se.` and its Standard Ebooks path with dots for slashes (`se.jane-austen.pride-and-prejudice`), or `wp.` and a
   Wikipedia article's title as Wikipedia's links write it (`wp.Moby-Dick`, `wp.Herman_Melville`)
 - `section` - the section's number in the book's contents (its sections and subsections in order, from 1)
+- `char` - a place in the book - its character offset in the book's text (the share sheet's "This place" - the
+  listener's sentence); the link opens there, not at the listener's place
 
 For example, `#book=se.miguel-de-cervantes-saavedra.don-quixote.john-ormsby&section=12` opens Don Quixote at its fifth
 chapter - or at the listener's place, if that is in the section.
