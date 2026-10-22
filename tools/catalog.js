@@ -14,7 +14,7 @@
 //   -o <file>                 the output file (default data/catalog.json)
 //
 // Each book's narrator - its voice - and its genres are chosen by a local Ollama decision model (tools/voicecast.js,
-// tools/genres.js; Ollama must be running, with the model pulled). Every remote page is cached under build/catalog/, so
+// tools/genres.js; Ollama must be running, with the model pulled). Every remote page is cached under cache/catalog/, so
 // a rerun is fast and an interrupted build resumes. Requests are throttled per site (Standard Ebooks about 2 a second)
 // and retried with backoff. GITenberg repositories are found in the gitberg project's published repository list; the
 // GitHub search API (10 searches a minute without a GITHUB_TOKEN) is used only for books missing from the list.
@@ -30,7 +30,7 @@ import process from 'node:process';
 
 
 const root = fileURLToPath(new URL('..', import.meta.url));
-const cacheDir = join(root, 'build', 'catalog');
+const cacheDir = join(root, 'cache', 'catalog');
 const userAgent = 'picoshelf-catalog/1.0 (+https://github.com/craigahobbs/picoshelf)';
 
 const seURL = 'https://standardebooks.org';
@@ -172,7 +172,7 @@ async function fetchRetry(url, {method = 'GET', headers = {}, timeout = 60000, a
 }
 
 
-// Fetch a URL's text, cached in a file under build/catalog/ - null for a 404 (cached as well). Cached files older than
+// Fetch a URL's text, cached in a file under cache/catalog/ - null for a 404 (cached as well). Cached files older than
 // maxAge days are refetched (Infinity keeps them forever). With --cache-only, any cached file is used and an
 // uncached URL is null.
 let cacheOnly = false;

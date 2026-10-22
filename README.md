@@ -8,8 +8,8 @@ from its source and read aloud by [PicoVox](https://github.com/craigahobbs/picov
 ([npm](https://www.npmjs.com/package/picovox)) - realistic speech synthesis in pure JavaScript, under 1 MB - synthesized
 on your device, in a Web Worker. No server, no recorded speech, no runtime dependencies beyond PicoVox.
 
-It is a static site, published with GitHub Pages: `index.html` is the app, and `.nojekyll` keeps GitHub Pages from
-processing the files.
+It is a static site, published with GitHub Pages: `make app` builds it into `build/app/` (`index.html`, the app, the
+catalog, and PicoVox), and `make gh-pages` publishes it.
 
 ## Links
 
@@ -29,24 +29,26 @@ chapter - or at the listener's place, if that is in the section.
 
 ## Layout
 
-- `index.html`, `app.js`, `engine.js`, `worker.js`, `renderworker.js`, `store.js`, `bookcache.js` - the app (copied
-  from voice-synth's `static/audiobook/`); the synthesis worker runs the voice network and its render worker the
-  synthesizer, at once on two cores
-- `sources/` - the book sources (Project Gutenberg, Standard Ebooks) and the Wikipedia shelf (`wikipedia.js` - live, from
-  Wikipedia's CORS-enabled APIs: today's featured and most-read articles, search, and an article's plain text, its
-  sections the chapters, read by default by Michael - of the best-measured voices on encyclopedia prose; CC BY-SA, credited on
-  each article)
-- `lib/` - the catalog and book-format code (catalog search, Gutenberg text cleanup, EPUB and ZIP reading)
+PicoShelf is a [javascript-build](https://github.com/craigahobbs/javascript-build#readme) package.
+
+- `static/index.html` - the page
+- `lib/` - the app: `app.js` (the library and the player), `engine.js` (playback), `worker.js` and `renderworker.js`
+  (the synthesis worker runs the voice network and its render worker the synthesizer, at once on two cores),
+  `store.js` and `bookcache.js` (the listener's places and the downloaded books, in browser storage), the catalog and
+  book-format code (`catalog.js` - catalog search; `gutenberg.js` - Gutenberg text cleanup; `epub.js`, `zip.js` - EPUB
+  and ZIP reading), and the book sources (`lib/sources/` - Project Gutenberg, Standard Ebooks, and the Wikipedia shelf,
+  `wikipedia.js` - live, from Wikipedia's CORS-enabled APIs: today's featured and most-read articles, search, and an
+  article's plain text, its sections the chapters, read by default by Michael - of the best-measured voices on
+  encyclopedia prose; CC BY-SA, credited on each article)
+- `test/` - the unit tests (`node --test`, with jsdom for the browser; 100% coverage)
 - `data/catalog.json` - the book catalog, each book with its narrator's voice and its genres (`make catalog`)
 - `tools/` - the catalog builder (`catalog.js` - every Standard Ebooks book and the most-downloaded Project Gutenberg
-  books, its pages cached under `build/catalog/`), and the decisions a local Ollama decision model makes about each
+  books, its pages cached under `cache/catalog/`), and the decisions a local Ollama decision model makes about each
   book (`decide.js`): its narrator (`voicecast.js`; `voicelabels.json`, 132 hand-cast books, scores the decision models)
   and its genres (`genres.js`)
-- `picovox/` - the PicoVox voice - a copy of the npm package `picovox`'s `lib/` (the text front end and G2P, the neural
-  model and synthesizer runtime, the synthesis pipeline and sentence splitting the app uses, and the generated model
-  modules, `lib/models/`), with its `package.json` (the version) and `LICENSE`
-- `package.json`, `package-lock.json` - the PicoVox dependency, pinned by the lock file
-- `Makefile` - `make picovox` copies the installed package into `picovox/`; `make catalog` builds the catalog
+- `package.json` - the PicoVox dependency (`picovox`) and the development dependencies
+- `Makefile` - javascript-build's targets (`make commit` - the tests, lint, documentation, and 100% coverage), and
+  `make app`, `make run`, and `make catalog`
 
 ## The catalog and its narrators
 
@@ -71,26 +73,25 @@ title, author, and subject, and shown three ways: all its books, by author (by s
 under each), or by genre; an author or a genre opens to its books. The book playing is in the player bar at the
 bottom - close it there (×) to stop, its place kept in My Library.
 
-## Updating PicoVox
+## PicoVox
 
-A static site can't resolve bare imports (`import ... from 'picovox'`), so the app imports a committed copy of the
-package, `picovox/`, which GitHub Pages serves. To update it, install the new version, copy it, and commit:
-
-```sh
-npm install picovox@latest
-make picovox
-git add package.json package-lock.json picovox
-```
-
-`make picovox` runs `npm ci` (the version in `package-lock.json`) and replaces `picovox/` with
-`node_modules/picovox/lib/`, `package.json`, and `LICENSE`.
+The app imports PicoVox by its package name (`import ... from 'picovox/lib/synthesis.js'`), from `node_modules`. A
+static site can't resolve bare imports, so `make app` copies the package's `lib/` into the site (`picovox/lib/`) and
+rewrites the app's imports to relative ones. To update PicoVox, change its version in `package.json` (`~1.6` takes the
+latest 1.6 release) and rebuild (`make clean app`).
 
 ## Running locally
 
-Serve the directory with any static file server, for example:
-
 ```sh
-python3 -m http.server 8000
+make run
 ```
 
-then open http://localhost:8000/.
+then open http://localhost:8000/ (`make run` builds the site and serves `build/app/`).
+
+## Development
+
+```sh
+make commit
+```
+
+runs the unit tests, eslint, jsdoc, and the coverage check (100%), and builds the site.

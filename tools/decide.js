@@ -17,7 +17,7 @@ import process from 'node:process';
 export const root = fileURLToPath(new URL('..', import.meta.url));
 
 // The decisions' cache directory
-export const cacheDir = join(root, 'build', 'catalog');
+export const cacheDir = join(root, 'cache', 'catalog');
 
 // The default decision model
 export const decisionModel = 'kev:9b-nvfp4';

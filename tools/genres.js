@@ -8,7 +8,7 @@
 //   --book <title>   the genres of the catalog books whose title contains this, with their probabilities
 //
 // The catalog builder (tools/catalog.js) gives every book its genres (the catalog's "genres" names them); each book's
-// genres are cached under build/catalog/genres/ by model, questions, and the book's details.
+// genres are cached under cache/catalog/genres/ by model, questions, and the book's details.
 
 import {catalogBooks, checkModel, decide, decideBooks, decisionModel} from './decide.js';
 import {fileURLToPath} from 'node:url';

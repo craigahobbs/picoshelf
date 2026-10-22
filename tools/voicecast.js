@@ -12,7 +12,7 @@
 //                      then the others that suit it
 //   --book <title>     cast the catalog books whose title contains this
 //
-// The catalog builder (tools/catalog.js) casts every book; each cast is cached under build/catalog/voices/ by model,
+// The catalog builder (tools/catalog.js) casts every book; each cast is cached under cache/catalog/voices/ by model,
 // scheme, and the book's details, so a rebuild casts only new or changed books.
 
 import {catalogBooks, checkModel, decide, decideBooks, decisionModel, root} from './decide.js';

@@ -1,0 +1,35 @@
+# CLAUDE.md
+
+Notes for coding agents working in this repository.
+
+## javascript-build
+
+This is a [javascript-build](https://github.com/craigahobbs/javascript-build#readme) package. Read the javascript-build
+skill before running tests, lint, coverage, or changing the Makefile:
+[`../javascript-build/SKILL.md`](../javascript-build/SKILL.md) if that file exists, otherwise
+[https://raw.githubusercontent.com/craigahobbs/javascript-build/main/SKILL.md](https://raw.githubusercontent.com/craigahobbs/javascript-build/main/SKILL.md).
+
+Local Makefile overrides:
+
+- `GHPAGES_SRC` - `build/app/`
+- `USE_JSDOM` - jsdom is a development dependency (the app's tests, and `tools/catalog.js`)
+- `ESLINT_ARGS` - also `tools/`
+- `commit` also depends on `app`
+- `superclean` also removes `cache/` (the catalog builder's cached pages and Ollama decisions - hours to rebuild)
+
+Package-specific targets:
+
+- `make app` - the site, `build/app/`: `static/index.html`, `lib/`, `data/catalog.json`, and PicoVox
+  (`node_modules/picovox/lib/` in `picovox/lib/`), the app's bare `picovox/...` imports rewritten to relative ones
+- `make run` - `make app`, then serve `build/app/` at http://localhost:8000/
+- `make catalog` - rebuild `data/catalog.json` (`tools/catalog.js`; needs a local Ollama)
+
+## Code
+
+- `lib/` - the app (browser ES modules): `app.js` (the UI - importing it has no side effects; `main(window, overrides)`
+  starts it, as `static/index.html` does, and the tests pass fakes for its services in `overrides`), `engine.js` (playback), `worker.js` and `renderworker.js`
+  (the synthesis Web Workers), `store.js` and `bookcache.js` (browser storage), the book code (`catalog.js`, `zip.js`,
+  `epub.js`, `gutenberg.js`), and the book sources (`lib/sources/`). PicoVox is imported bare (`picovox/lib/...`), so
+  the code runs under Node's tests as is and `make app` makes the imports relative for the static site.
+- `tools/` - the catalog builder (Node; linted, not covered).
+- `test/` - `node --test` unit tests; jsdom stands in for the browser.
