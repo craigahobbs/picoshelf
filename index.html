@@ -412,6 +412,7 @@
         text-align: center;
         gap: 6px;
         padding-top: 8px;
+        container-type: inline-size;
     }
     .now-playing .cover {
         flex: 1 1 0;
@@ -458,12 +459,16 @@
         color: var(--accent);
         min-height: 1.3em;
     }
+    /* The sentence, in three lines - a long one in smaller type, sized to fit its length (--chars, set by app.js) at
+       Georgia's average character width (0.52em - measured on book sentences in the player's widths), down to 0.75rem */
     #sentence {
+        --chars: 1;
         flex: none;
         margin: 6px 0 0;
-        height: 4.5em;
-        max-width: 34em;
+        height: 4.725rem;
+        max-width: 100%;
         font: 1.05rem/1.5 Georgia, "Iowan Old Style", serif;
+        font-size: clamp(0.75rem, 300cqi / (var(--chars) * 0.52), 1.05rem);
         overflow: hidden;
         display: -webkit-box;
         -webkit-line-clamp: 3;
@@ -754,8 +759,8 @@
     <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.14v13.72a1 1 0 0 0 1.52.85l10.9-6.86a1 1 0 0 0 0-1.7L9.52 4.29A1 1 0 0 0 8 5.14z"/></symbol>
     <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4.5" width="4" height="15" rx="1.2"/><rect x="14" y="4.5" width="4" height="15" rx="1.2"/></symbol>
     <symbol id="i-busy" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 9 9h-2.5A6.5 6.5 0 1 1 12 5.5z"/></symbol>
-    <symbol id="i-back30" viewBox="0 0 48 48"><path d="M24 8a16 16 0 1 1-15.7 19h3.1A13 13 0 1 0 24 11v5l-8-6.5L24 3z"/><text x="24" y="28.3" text-anchor="middle" font-size="12" font-weight="700" font-family="system-ui, sans-serif">30</text></symbol>
-    <symbol id="i-forward30" viewBox="0 0 48 48"><path d="M24 8a16 16 0 1 0 15.7 19h-3.1A13 13 0 1 1 24 11v5l8-6.5L24 3z"/><text x="24" y="28.3" text-anchor="middle" font-size="12" font-weight="700" font-family="system-ui, sans-serif">30</text></symbol>
+    <symbol id="i-sentence-back" viewBox="0 0 48 48"><path d="M24 8a16 16 0 1 1-15.7 19h3.1A13 13 0 1 0 24 11v5l-8-6.5L24 3z"/><rect x="17" y="20.5" width="14" height="2.6" rx="1.3"/><rect x="17" y="26" width="9" height="2.6" rx="1.3"/></symbol>
+    <symbol id="i-sentence-forward" viewBox="0 0 48 48"><path d="M24 8a16 16 0 1 0 15.7 19h-3.1A13 13 0 1 1 24 11v5l8-6.5L24 3z"/><rect x="17" y="20.5" width="14" height="2.6" rx="1.3"/><rect x="17" y="26" width="9" height="2.6" rx="1.3"/></symbol>
     <symbol id="i-section-back" viewBox="0 0 24 24"><path d="M6 5h2v14H6zm3.5 7 8.5 6V6z"/></symbol>
     <symbol id="i-section-forward" viewBox="0 0 24 24"><path d="M16 5h2v14h-2zM6 18l8.5-6L6 6z"/></symbol>
     <symbol id="i-share" viewBox="0 0 24 24"><path d="m12 2.6 4.7 4.7-1.4 1.4L13 6.4V15h-2V6.4L8.7 8.7 7.3 7.3zM5 10h4v2H6v8h12v-8h-3v-2h4a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V11a1 1 0 0 1 1-1z"/></symbol>
@@ -813,9 +818,9 @@
         </div>
         <div class="transport">
             <button id="sectionBack" class="skip section-skip" type="button" aria-label="Previous section" title="Previous section"><svg class="icon"><use href="#i-section-back"/></svg></button>
-            <button id="skipBack" class="skip" type="button" aria-label="Back 30 seconds"><svg class="icon"><use href="#i-back30"/></svg></button>
+            <button id="skipBack" class="skip" type="button" aria-label="Previous sentence" title="Previous sentence"><svg class="icon"><use href="#i-sentence-back"/></svg></button>
             <button id="playPause" class="round-play" type="button" aria-label="Play"><svg class="icon"><use href="#i-play"/></svg></button>
-            <button id="skipForward" class="skip" type="button" aria-label="Forward 30 seconds"><svg class="icon"><use href="#i-forward30"/></svg></button>
+            <button id="skipForward" class="skip" type="button" aria-label="Next sentence" title="Next sentence"><svg class="icon"><use href="#i-sentence-forward"/></svg></button>
             <button id="sectionForward" class="skip section-skip" type="button" aria-label="Next section" title="Next section"><svg class="icon"><use href="#i-section-forward"/></svg></button>
         </div>
         <p id="playerStatus" role="status"></p>

@@ -281,24 +281,19 @@ export class Engine {
         }
     }
 
-    // Skip about a number of seconds (negative back) - to a sentence start: ahead at least to the next sentence; back to
-    // this sentence's start if more than two seconds into it, else to an earlier one
-    skip(seconds) {
+    // Skip to the next sentence, or back - to this sentence's start if more than two seconds into it, else to the
+    // previous sentence's
+    skipSentence(direction) {
         if (this.session === null || this.session.units.length === 0) {
             return;
         }
         const current = this.position();
-        const target = this.positionChar(current) + seconds * this.charsPerSecond();
-        let unit = this.unitAtChar(Math.max(0, Math.min(this.textLength() - 1, target)));
-        if (seconds > 0 && unit <= current.unit) {
-            unit = current.unit + 1;
-        } else if (seconds < 0 && unit >= current.unit) {
-            unit = current.time > 2 ? current.unit : current.unit - 1;
-        }
+        const unit = direction > 0 ? current.unit + 1 : (current.time > 2 ? current.unit : current.unit - 1);
         if (unit >= this.session.units.length) {
             this.finish();
             return;
         }
+        this.ended = false;
         this.moveTo(Math.max(0, unit));
     }
 

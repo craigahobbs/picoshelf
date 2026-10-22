@@ -24,8 +24,7 @@ const catalogPromise = fetch(new URL('./data/catalog.json', import.meta.url)).th
 });
 
 
-// The skip distance (s), the narrator speeds, and the narrator voices
-const skipSeconds = 30;
+// The narrator speeds and voices
 const speeds = [0.8, 1, 1.1, 1.2, 1.5];
 // (the app's keys for PicoVox's male and female voices are neural-male and neural-female - listeners' saved settings -
 // and the app names them John and Mary; the designed voices are PicoVox's keys)
@@ -212,10 +211,11 @@ function encodeHash(params) {
 
 
 // The open book's link - #book=ID, and with a section (the contents' sections and subsections in order, from 1),
-// &section=N
-function bookLink(section = null) {
+// &section=N, and a place in it (a character offset in the book's text), &char=N
+function bookLink(section = null, char = null) {
     const book = state.books[current.key];
-    return `${window.location.origin}${window.location.pathname}${window.location.search}#${encodeHash({'book': linkId(book), section})}`;
+    const hash = encodeHash({'book': linkId(book), section, char});
+    return `${window.location.origin}${window.location.pathname}${window.location.search}#${hash}`;
 }
 
 
@@ -242,8 +242,8 @@ function updateAddress() {
 }
 
 
-// Open a link's book (#book=ID&section=N) - in the player, at the section (the listener's place, if it's in the
-// section); returns false if the link names no book
+// Open a link's book (#book=ID&section=N&char=N) - in the player, at the place, else at the section (the listener's
+// place, if it's in the section); returns false if the link names no book
 async function openLink(hash) {
     const params = decodeHash(hash);
     const linked = linkBook(params.book ?? '');
@@ -251,6 +251,7 @@ async function openLink(hash) {
         return false;
     }
     const section = /^[1-9]\d*$/.test(params.section ?? '') ? Number(params.section) : null;
+    const char = /^\d+$/.test(params.char ?? '') ? Number(params.char) : null;
     const saved = state.books[bookKey(linked)];
     let book = saved;
     if (book === undefined && linked.source === 'wikipedia') {
@@ -261,7 +262,7 @@ async function openLink(hash) {
     if (book === null) {
         return false;
     }
-    openBook(book, {'play': false, 'show': true, section});
+    openBook(book, {'play': false, 'show': true, section, char});
     return true;
 }
 
@@ -365,9 +366,9 @@ function onEngineChange(engineState) {
 }
 
 
-// Open a book - download it (or use the cached copy) and load it at the listener's place. To play, call from a user
-// gesture (it unlocks audio).
-async function openBook(book, {play = false, show = true, section = null} = {}) {
+// Open a book - download it (or use the cached copy) and load it at the listener's place (or a linked place or
+// section). To play, call from a user gesture (it unlocks audio).
+async function openBook(book, {play = false, show = true, section = null, char = null} = {}) {
     const key = bookKey(book);
     const saved = state.books[key] || {};
     state.books[key] = {
@@ -383,13 +384,14 @@ async function openBook(book, {play = false, show = true, section = null} = {}) 
         engine.ensureAudio();
     }
 
-    // Already open? (at a linked section, if not in it)
+    // Already open? (at a linked place, or a linked section if not in it)
     if (current !== null && current.key === key && current.error === null) {
-        if (section !== null) {
+        if (section !== null || char !== null) {
             if (current.loading) {
                 current.section = section;
+                current.char = char;
             } else if (engine.loaded) {
-                const start = sectionStart(current.chapters, section, engine.state().sentenceChar);
+                const start = linkStart(current.chapters, section, char, engine.textLength(), engine.state().sentenceChar);
                 if (start !== engine.state().sentenceChar) {
                     engine.seekChar(start);
                 }
@@ -403,7 +405,7 @@ async function openBook(book, {play = false, show = true, section = null} = {}) 
         return;
     }
     engine.pause();
-    current = {key, 'chapters': [], 'loading': true, 'progress': null, 'error': null, 'playWhenLoaded': play, section};
+    current = {key, 'chapters': [], 'loading': true, 'progress': null, 'error': null, 'playWhenLoaded': play, section, char};
     renderAll();
     const opening = current;
     try {
@@ -436,7 +438,8 @@ async function openBook(book, {play = false, show = true, section = null} = {}) 
         const entry = state.books[key];
         entry.title ||= prepared.title || '';
         entry.author ||= prepared.author || '';
-        engine.load(prepared.text, narrator(), sectionStart(opening.chapters, opening.section, entry.char || 0));
+        const start = linkStart(opening.chapters, opening.section, opening.char, prepared.text.length, entry.char || 0);
+        engine.load(prepared.text, narrator(), start);
         persist();
         renderAll();
         if (opening.playWhenLoaded) {
@@ -474,12 +477,18 @@ function togglePlay() {
 }
 
 
-// Skip back or forward
-function skip(seconds) {
+// Skip back or forward a sentence
+function skip(direction) {
     if (current !== null && !current.loading && engine.loaded) {
-        engine.skip(seconds);
+        engine.skipSentence(direction);
         savePosition(true);
     }
+}
+
+
+// A link's starting place - its place (if in the text), else its section's start (sectionStart)
+function linkStart(chapters, section, linkChar, textLength, char) {
+    return linkChar !== null && linkChar < textLength ? linkChar : sectionStart(chapters, section, char);
 }
 
 
@@ -591,6 +600,7 @@ function renderPlayer() {
     const chapter = ready ? chapterAt(engineState.char) : null;
     chapterTitle.textContent = chapter === null ? (book.chapter || '') : chapter.title;
     sentence.textContent = ready ? engineState.sentence : '';
+    sentence.style.setProperty('--chars', Math.max(1, sentence.textContent.length));
     progressFill.style.width = `${Math.min(100, percent).toFixed(2)}%`;
     progressBar.setAttribute('aria-valuenow', Math.floor(percent));
     percentLabel.textContent = `${Math.floor(percent)}%`;
@@ -1043,14 +1053,21 @@ function renderSheet() {
 }
 
 
-// The share sheet - links to the book and to the listener's section (the system's share sheet, else copied)
+// The share sheet - links to the book, to the listener's section, and to their place (the system's share sheet, else
+// copied)
 function renderShare() {
     sheetTitle.textContent = 'Share';
     const book = state.books[current.key];
-    const section = engine.loaded ? sectionNumber(engine.state().sentenceChar) : null;
+    const ready = !current.loading && engine.loaded;
+    const engineState = engine.state();
+    const section = ready ? sectionNumber(engineState.sentenceChar) : null;
     const choices = [{'label': book.title, 'detail': 'This book', 'url': bookLink()}];
     if (section !== null) {
         choices.push({'label': current.chapters[section - 1].title, 'detail': 'This section', 'url': bookLink(section)});
+    }
+    if (ready && engineState.sentence !== '') {
+        const snippet = engineState.sentence.length > 100 ? `${engineState.sentence.slice(0, 97)}...` : engineState.sentence;
+        choices.push({'label': snippet, 'detail': 'This place', 'url': bookLink(section, engineState.sentenceChar)});
     }
     const list = make('ul', 'sheet-list');
     const note = make('p', 'muted share-note', '');
@@ -1380,8 +1397,7 @@ function updateMediaSession() {
         // then show the pause button: pause on a paused book plays it, so the button does what it shows either way)
         const handlers = {
             'play': () => engine.play(), 'pause': () => (engine.playing ? engine.pause() : engine.play()),
-            'seekbackward': () => skip(-skipSeconds), 'seekforward': () => skip(skipSeconds), 'previoustrack': () => skip(-skipSeconds),
-            'nexttrack': () => skip(skipSeconds),
+            'seekbackward': () => skip(-1), 'seekforward': () => skip(1), 'previoustrack': () => skip(-1), 'nexttrack': () => skip(1),
             'seekto': (details) => {
                 if (engine.loaded && !current.loading && Number.isFinite(details.seekTime)) {
                     engine.seekChar(details.seekTime * engine.charsPerSecond());
@@ -1446,8 +1462,8 @@ window.addEventListener('popstate', () => {
     }
 });
 playPauseButton.addEventListener('click', togglePlay);
-element('skipBack').addEventListener('click', () => skip(-skipSeconds));
-element('skipForward').addEventListener('click', () => skip(skipSeconds));
+element('skipBack').addEventListener('click', () => skip(-1));
+element('skipForward').addEventListener('click', () => skip(1));
 sectionBackButton.addEventListener('click', () => skipSection(-1));
 sectionForwardButton.addEventListener('click', () => skipSection(1));
 element('shareButton').addEventListener('click', () => openSheet('share'));
@@ -1487,9 +1503,9 @@ document.addEventListener('keydown', (event) => {
         event.preventDefault();
         togglePlay();
     } else if (event.key === 'ArrowLeft' && !playerView.hidden) {
-        skip(-skipSeconds);
+        skip(-1);
     } else if (event.key === 'ArrowRight' && !playerView.hidden) {
-        skip(skipSeconds);
+        skip(1);
     }
 });
 
