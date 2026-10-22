@@ -596,6 +596,34 @@ test('main, my library', async () => {
     assert.deepEqual([...element('results').querySelectorAll('.group-name')].map((name) => name.textContent), [
         'General Fiction', 'Horror & Ghost Stories', 'Romance', 'Wikipedia'
     ]);
+
+    // The authors view - an author's link to their books in the library (a search); not for Wikipedia's or anonymous books
+    app.click(app.tab('viewTabs', 'Authors'));
+    const authorGroups = () => [...element('results').querySelectorAll('details.group')];
+    for (const group of authorGroups()) {
+        group.open = true;
+    }
+    await settle();
+    assert.deepEqual(authorGroups().map((group) => [
+        group.querySelector('.group-name').textContent, group.querySelector('.group-link')?.textContent ?? null
+    ]), [
+        ['Jane Austen', 'More by Jane Austen in the Library'],
+        ['Lewis Carroll', 'More by Lewis Carroll in the Library'],
+        ['Mary Shelley', 'More by Mary Shelley in the Library'],
+        ['Mary Wollstonecraft Shelley', 'More by Mary Wollstonecraft Shelley in the Library'],
+        ['Wikipedia', null]
+    ]);
+    app.click(authorGroups()[0].querySelector('.group-link'));
+    assert.equal(app.tab('scopeTabs', 'Library').getAttribute('aria-selected'), 'true');
+    assert.equal(app.saved.scope, 'library');
+    assert.equal(app.saved.libraryView, 'authors');
+    assert.equal(element('search').value, 'Jane Austen');
+    assert.deepEqual(app.scrolls.at(-1), [0, 0]);
+    assert.deepEqual(authorGroups().map((group) => [group.querySelector('.group-name').textContent, group.open]), [['Jane Austen', true]]);
+    assert.equal(element('results').querySelector('.group-link'), null);
+    app.click(app.tab('scopeTabs', 'My Library'));
+    app.search('');
+    app.runTimeouts();
     app.click(app.tab('viewTabs', 'All'));
 
     // No matches
