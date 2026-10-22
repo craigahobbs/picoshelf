@@ -459,8 +459,9 @@
         color: var(--accent);
         min-height: 1.3em;
     }
-    /* The sentence, in three lines - a long one in smaller type, sized to fit its length (--chars, set by app.js) at
-       Georgia's average character width (0.52em - measured on book sentences in the player's widths), down to 0.75rem */
+    /* The sentence, in a box three lines tall - a long one in smaller type, sized to fit its length (--chars, set by
+       app.js) at Georgia's average character width (0.52em - measured on book sentences in the player's widths): in
+       three lines, or in four (the box's height at 0.7875rem), whichever is larger, down to 0.75rem */
     #sentence {
         --chars: 1;
         flex: none;
@@ -468,10 +469,10 @@
         height: 4.725rem;
         max-width: 100%;
         font: 1.05rem/1.5 Georgia, "Iowan Old Style", serif;
-        font-size: clamp(0.75rem, 300cqi / (var(--chars) * 0.52), 1.05rem);
+        font-size: max(0.75rem, min(300cqi / (var(--chars) * 0.52), 1.05rem), min(400cqi / (var(--chars) * 0.52), 0.7875rem));
         overflow: hidden;
         display: -webkit-box;
-        -webkit-line-clamp: 3;
+        -webkit-line-clamp: 4;
         -webkit-box-orient: vertical;
     }
     .progress {
