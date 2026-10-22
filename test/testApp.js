@@ -1761,6 +1761,31 @@ test('main, bookmarks sheet', async (context) => {
 });
 
 
+test('main, about sheet', async () => {
+    const app = startApp();
+    const {element} = app;
+    await settle();
+    app.click('aboutButton');
+    assert.equal(element('sheet').open, true);
+    assert.equal(app.text('sheetTitle'), 'About PicoShelf');
+    // (the narrators' note - no longer in the narrator sheet)
+    const paragraphs = [...element('sheetBody').querySelectorAll('p')].map((paragraph) => paragraph.textContent);
+    assert.equal(paragraphs.length, 3);
+    assert.match(paragraphs[1], /^The narrators are PicoVox voices, synthesized on your device/);
+    const links = [...element('sheetBody').querySelectorAll('.about-links a')];
+    assert.deepEqual(links.map((link) => [link.textContent, link.href, link.target]), [
+        ['Standard Ebooks', 'https://standardebooks.org/', '_blank'],
+        ['Project Gutenberg', 'https://www.gutenberg.org/', '_blank'],
+        ['Wikipedia', 'https://en.wikipedia.org/', '_blank'],
+        ['PicoVox', 'https://github.com/craigahobbs/picovox#readme', '_blank'],
+        ['PicoShelf on GitHub', 'https://github.com/craigahobbs/picoshelf#readme', '_blank']
+    ]);
+    app.click('sheetClose');
+    assert.equal(element('sheet').open, false);
+    app.close();
+});
+
+
 test('main, settings sheet', async () => {
     const app = await startPlayer();
     const {element, engine} = app;
