@@ -448,13 +448,21 @@ test('standard ebooks source, load unavailable', async () => {
 
 
 test('standard ebooks source, load unavailable download', async () => {
+    // The error page's body is canceled
+    let canceled = false;
+    const body = new ReadableStream({
+        cancel() {
+            canceled = true;
+        }
+    });
     const {fakeFetch, requests} = fakeServer(smallEpub.bytes, ({method}) => (
-        method === 'GET' ? new Response('Not found', {'status': 404}) : null
+        method === 'GET' ? new Response(body, {'status': 404}) : null
     ));
     await withFetch(fakeFetch, async () => {
         await assert.rejects(source.load(book, ignoreProgress), {'message': 'This book isn\'t available from Standard Ebooks.'});
     });
     assert.deepEqual(requests, wholeRequests);
+    assert.ok(canceled);
 });
 
 

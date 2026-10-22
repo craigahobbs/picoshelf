@@ -186,6 +186,10 @@ class FakeEngine {
         this.calls.push(['ensureAudio']);
     }
 
+    releaseMedia() {
+        this.calls.push(['releaseMedia']);
+    }
+
     textLength() {
         return this.text.length;
     }
@@ -1475,11 +1479,13 @@ test('main, download failure and retry', async () => {
     app.click('bookmarksButton');
     assert.equal(element('sheet').open, false);
 
-    // Tried again - in the player
+    // Tried again - in the player; the play's media element (started for the download) is released when it fails
     app.click('playPause');
     assert.equal(element('playerView').hidden, false);
+    assert.deepEqual(engine.calls.slice(-2), [['ensureAudio'], ['pause']]);
     await settle();
     assert.equal(app.text('playerStatus'), 'Error Press play to try again.');
+    assert.deepEqual(engine.calls.slice(-2), [['pause'], ['releaseMedia']]);
 
     // A link to the failed book (from the library) - tried again; loaded (no chapters)
     app.click('toLibrary');
@@ -1654,14 +1660,14 @@ test('main, the previous book while another downloads, or after its download fai
     app.key('ArrowRight');
     assert.deepEqual(engine.calls.slice(count), []);
 
-    // Nor after Frankenstein's download failed
+    // Nor after Frankenstein's download failed (its media released)
     loading.reject(new Error('Couldn\'t download the book.'));
     await settle();
     assert.equal(app.text('playerStatus'), 'Couldn\'t download the book. Press play to try again.');
     handlers.play();
     handlers.seekbackward();
     app.key('ArrowLeft');
-    assert.deepEqual(engine.calls.slice(count), []);
+    assert.deepEqual(engine.calls.slice(count), [['releaseMedia']]);
 
     // The mini player - Frankenstein's place, not Pride and Prejudice's
     app.click('toLibrary');

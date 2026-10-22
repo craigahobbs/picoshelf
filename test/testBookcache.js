@@ -2,24 +2,26 @@ import {strict as assert} from 'node:assert';
 import test from 'node:test';
 
 
-// A fake indexedDB - the API surface bookcache.js uses. open's outcome is openMode: 'success' (an upgrade on the first
-// open, then success), 'error', 'blocked', or 'throw' (open throws, as with IndexedDB disabled). The database's
-// failTransaction makes transaction throw; failRequest makes each store request fail.
+// A fake indexedDB - the API surface bookcache.js uses. open's outcome is openMode (changeable): 'success' (an upgrade
+// on the first open, then success), 'error', 'blocked', or 'throw' (open throws, as with IndexedDB disabled). The
+// database's failTransaction makes transaction throw; failRequest makes each store request fail; and the browser
+// closing the connection calls its onclose.
 function fakeIndexedDB(openMode = 'success') {
     const fake = {
+        openMode,
         'opens': [],
         'stores': {},
         'database': null,
         'open': (name, version) => {
             fake.opens.push([name, version]);
-            if (openMode === 'throw') {
+            if (fake.openMode === 'throw') {
                 throw new Error('SecurityError');
             }
             const request = {'result': undefined};
             setTimeout(() => {
-                if (openMode === 'error') {
+                if (fake.openMode === 'error') {
                     request.onerror();
-                } else if (openMode === 'blocked') {
+                } else if (fake.openMode === 'blocked') {
                     request.onblocked();
                 } else {
                     request.result = fake.database;
@@ -34,6 +36,7 @@ function fakeIndexedDB(openMode = 'success') {
         }
     };
     fake.database = {
+        'onclose': null,
         'upgraded': false,
         'failTransaction': false,
         'failRequest': false,
@@ -144,6 +147,9 @@ test('bookcache, request error', async () => {
     assert.equal(await deleteCachedBook(book.key), null);
     fake.database.failRequest = false;
     assert.deepEqual(await getCachedBook(book.key), book);
+
+    // Each failure forgets the connection - the next call opens the database again
+    assert.equal(fake.opens.length, 4);
 });
 
 
@@ -154,6 +160,30 @@ test('bookcache, transaction error', async () => {
     fake.database.failTransaction = true;
     assert.equal(await getCachedBook(book.key), null);
     assert.equal(await putCachedBook(book), null);
+
+    // Each failure forgets the connection - the next call opens the database again
+    assert.equal(fake.opens.length, 2);
+    fake.database.failTransaction = false;
+    assert.deepEqual(await getCachedBook(book.key), book);
+    assert.equal(fake.opens.length, 3);
+});
+
+
+test('bookcache, connection closed', async () => {
+    const fake = fakeIndexedDB();
+    const {getCachedBook, putCachedBook} = await importBookcache();
+    assert.equal(await putCachedBook(book), book.key);
+
+    // The browser closed the connection (Safari lost its IndexedDB server) - the next call opens the database again
+    const closeFirst = fake.database.onclose;
+    closeFirst();
+    assert.deepEqual(await getCachedBook(book.key), book);
+    assert.equal(fake.opens.length, 2);
+
+    // The first connection's close again - the new connection is kept
+    closeFirst();
+    assert.deepEqual(await getCachedBook(book.key), book);
+    assert.equal(fake.opens.length, 2);
 });
 
 
@@ -163,8 +193,12 @@ test('bookcache, open error', async () => {
     assert.equal(await putCachedBook(book), null);
     assert.equal(await getCachedBook(book.key), null);
 
-    // A failed open isn't retried
-    assert.equal(fake.opens.length, 1);
+    // A failed open is tried again by the next call
+    assert.equal(fake.opens.length, 2);
+    fake.openMode = 'success';
+    assert.equal(await putCachedBook(book), book.key);
+    assert.deepEqual(await getCachedBook(book.key), book);
+    assert.equal(fake.opens.length, 3);
 });
 
 
@@ -174,6 +208,8 @@ test('bookcache, open blocked', async () => {
     assert.equal(await getCachedBook(book.key), null);
     assert.equal(fake.opens.length, 1);
     assert.equal(fake.stores.books, undefined);
+    assert.equal(await getCachedBook(book.key), null);
+    assert.equal(fake.opens.length, 2);
 });
 
 
@@ -183,5 +219,5 @@ test('bookcache, IndexedDB unavailable', async () => {
     assert.equal(await putCachedBook(book), null);
     assert.equal(await getCachedBook(book.key), null);
     assert.equal(await deleteCachedBook(book.key), null);
-    assert.equal(fake.opens.length, 1);
+    assert.equal(fake.opens.length, 3);
 });

@@ -101,6 +101,10 @@ class FakeAudioContext {
     }
 
     suspend() {
+        // (a closed context can't suspend)
+        if (this.state === 'closed') {
+            return Promise.reject(new Error('InvalidStateError'));
+        }
         this.suspends += 1;
         this.state = 'suspended';
         return Promise.resolve();
@@ -335,6 +339,8 @@ test('Engine, worker error', async (testContext) => {
     assert.equal(prevented, 1);
     assert.equal(workers.length, 3);
     assert.equal(workers[0].terminated, true);
+    assert.equal(workers[0].onmessage, null);
+    assert.equal(workers[0].onerror, null);
     assert.equal(engine.workers[0].worker, workers[2]);
     assert.equal(engine.workers[0].starts, 2);
     assert.equal(engine.error, null);
@@ -351,13 +357,81 @@ test('Engine, worker error', async (testContext) => {
     assert.equal(engine.error, 'The speech synthesizer failed to start: serve the app over HTTP');
     assert.equal(changes.length, 1);
     assert.ok(events(engine).includes('worker 0 error: (no message) :'));
+});
 
-    // A worker that fails after it's ready is an error
+
+test('Engine, ready worker error', async (testContext) => {
+    const {engine, workers} = await setup(testContext);
+    engine.load(threeSentences);
+    workers[0].send({'type': 'ready'});
+    sendUnit(workers[0], 1, 0, [1]);
+    sendUnit(workers[0], 1, 1, [0.5], false);
+    assert.equal(engine.session.cache[1].slot, 0);
+
+    // Playing - the next unit waits for the rest of its audio
+    engine.play();
+    const context = engine.audioContext;
+    assert.deepEqual(engine.chain.map((entry) => [entry.unit, entry.startTime]), [[0, 0.06], [1, null]]);
+
+    // The worker fails after it's ready, synthesizing the chained unit - it's restarted (its queued messages ignored),
+    // its unfinished unit emptied, the units dealt again, and playback restarted from the position
+    context.currentTime = 0.56;
+    workers[0].send({'type': 'error', 'message': 'out of memory'});
+    assert.equal(engine.error, null);
+    assert.equal(workers.length, 2);
+    assert.equal(workers[0].terminated, true);
+    assert.equal(workers[0].onmessage, null);
+    assert.equal(workers[0].onerror, null);
+    assert.equal(engine.workers[0].worker, workers[1]);
+    assert.equal(engine.workers[0].starts, 1);
+    assert.ok(events(engine).includes('worker 0 error message: out of memory'));
+    assert.deepEqual(engine.session.cache[1], {'blocks': [], 'length': 0, 'done': false, 'run': null, 'slot': null, 'startedAt': null});
+    assert.equal(engine.session.cache[0].done, true);
+    assert.deepEqual(workers[1].messages.map((message) => message.type), ['prepare', 'units']);
+    assert.deepEqual(posted(workers[1], 'units').map((run) => [run.id, run.units.map((unit) => unit.index)]), [[2, [1, 2]]]);
+    assert.equal(engine.playing, true);
+    assert.ok(context.sources.every((source, ix) => ix === context.sources.length - 1 || source.stopped));
+    assert.deepEqual(starts(engine).at(-1), [0.565, 0.445]);
+
+    // The new worker's audio of the unit plays on
     workers[1].send({'type': 'ready'});
-    workers[1].send({'type': 'error', 'message': 'out of memory'});
+    sendUnit(workers[1], 2, 1, [0.5]);
+    assert.deepEqual(engine.chain.map((entry) => entry.unit), [0, 1, 2]);
+    assert.equal(engine.chain[1].startTime, 1.12);
+
+    // A restarted worker that fails before it's ready gets a fresh start (not counted)
+    sendUnit(workers[1], 2, 2, [0.5], false);
+    engine.pause();
+    await flush();
+    workers[1].send({'type': 'error', 'message': 'render worker: boom'});
     assert.equal(workers.length, 3);
+    workers[2].onerror({'preventDefault': () => null, 'message': 'no module'});
+    assert.equal(workers.length, 4);
+    assert.equal(engine.workers[0].starts, 2);
+    assert.equal(engine.error, null);
+
+    // Paused - the unfinished unit is dealt again, and playback stays paused
+    assert.equal(engine.playing, false);
+    assert.equal(engine.session.cache[2].run, null);
+    assert.deepEqual(posted(workers[3], 'units').map((run) => [run.id, run.units.map((unit) => unit.index)]), [[4, [2]]]);
+
+    // A third restart, then the fourth failure is an error
+    workers[3].send({'type': 'ready'});
+    workers[3].send({'type': 'error', 'message': 'out of memory'});
+    assert.equal(workers.length, 5);
+    assert.equal(engine.workerRestarts, 3);
+    workers[4].send({'type': 'ready'});
+    workers[4].send({'type': 'error', 'message': 'out of memory'});
+    assert.equal(workers.length, 5);
+    assert.equal(workers[4].terminated, false);
     assert.equal(engine.error, 'out of memory');
-    assert.ok(events(engine).includes('worker 1 error message: out of memory'));
+
+    // A book's load allows restarts again - a book with nothing to read has nothing to deal
+    engine.load('  ');
+    assert.equal(engine.workerRestarts, 0);
+    workers[4].send({'type': 'error', 'message': 'out of memory'});
+    assert.equal(workers.length, 6);
+    assert.deepEqual(workers[5].messages.map((message) => message.type), ['prepare']);
 });
 
 
@@ -368,13 +442,13 @@ test('Engine, worker error restarts runs', async (testContext) => {
     sendUnit(workers[1], 2, 1, [0.5], false);
 
     // A worker's error message (it couldn't load its models) before it's ready - the worker is restarted (given the
-    // models, and prepared) and the runs forgotten
+    // models, and prepared) and the units not started dealt again
     workers[0].send({'type': 'error', 'message': 'no models'});
     assert.equal(workers.length, 3);
     assert.equal(workers[0].terminated, true);
     assert.equal(engine.workers[0].worker, workers[2]);
     assert.equal(engine.error, null);
-    assert.deepEqual(engine.session.runs, []);
+    assert.deepEqual(engine.session.runs, [{'id': 3, 'order': [0]}, {'id': 4, 'order': [2]}]);
     assert.deepEqual(posted(workers[2], 'prepare'), [{'type': 'prepare'}]);
     assert.equal(posted(workers[1], 'prepare').length, 1);
     await flush();
@@ -386,7 +460,7 @@ test('Engine, worker error restarts runs', async (testContext) => {
     assert.equal(engine.session.cache[1].done, true);
     assert.equal(engine.session.cache[1].length, 0.75);
 
-    // Playing deals the other units again
+    // Playing - the units are dealt already
     engine.play();
     assert.deepEqual(posted(workers[2], 'units').map((run) => [run.id, run.units.map((unit) => unit.index)]), [[3, [0]]]);
     assert.deepEqual(posted(workers[1], 'units').map((run) => [run.id, run.units.map((unit) => unit.index)]), [[2, [1]], [4, [2]]]);
@@ -567,6 +641,7 @@ test('Engine, worker messages', async (testContext) => {
     clock.ms = 1000;
     engine.onWorkerMessage({'type': 'unitStart', 'id': 1, 'unit': 0});
     assert.equal(cache[0].run, 1);
+    assert.equal(cache[0].slot, 0);
     assert.equal(cache[0].startedAt, 1000);
     sendUnit(worker, 1, 0, [0.5, 0.25], false);
     assert.equal(cache[0].blocks.length, 2);
@@ -607,7 +682,7 @@ test('Engine, worker messages', async (testContext) => {
     worker.send({'type': 'unitDone', 'id': 1, 'unit': 1});
     worker.send({'type': 'unitBlock', 'id': 2, 'unit': 2, 'samples': new Float32Array(100), 'sampleRate': 1000});
     worker.send({'type': 'unitDone', 'id': 2, 'unit': 2});
-    assert.deepEqual(cache[2], {'blocks': [], 'length': 0, 'done': false, 'run': null, 'startedAt': null});
+    assert.deepEqual(cache[2], {'blocks': [], 'length': 0, 'done': false, 'run': null, 'slot': null, 'startedAt': null});
     assert.equal(engine.measuredChars, 18);
     assert.equal(engine.measuredSeconds, 1.25);
     assert.equal(engine.synthesizedSeconds, 1.25);
@@ -964,6 +1039,7 @@ test('Engine, setVoice', async (testContext) => {
 
 test('Engine, audio', async (testContext) => {
     const {engine, workers} = await setup(testContext, {'nav': {...desktop, 'hardwareConcurrency': 5}});
+    const revokeObjectURL = testContext.mock.method(URL, 'revokeObjectURL');
     engine.load(threeSentences);
     sendUnit(workers[0], 1, 0, [1]);
 
@@ -1049,14 +1125,26 @@ test('Engine, audio', async (testContext) => {
         assert.equal(brokenMedia.pauses, pauses + 1);
         assert.equal(engine.mediaElement.plays, 1);
         assert.ok(events(engine).includes(event));
+        // (the silent loop's blob URL released)
+        assert.deepEqual(revokeObjectURL.mock.calls.at(-1).arguments, [brokenMedia.src]);
         await flush();
     }
+    assert.equal(revokeObjectURL.mock.calls.length, 3);
+
+    // The browser closed the audio context while playing - a pause can't suspend it (no unhandled rejection)
+    const closedContext = engine.audioContext;
+    closedContext.state = 'closed';
+    engine.pause();
+    assert.equal(engine.mediaElement.pauses, 1);
+    assert.equal(closedContext.suspends, 0);
+    await flush();
 });
 
 
 test('Engine, audio on iOS', async (testContext) => {
     const audioSession = {'type': 'auto'};
     const {engine, workers} = await setup(testContext, {'nav': {...iPhone, audioSession}});
+    const revokeObjectURL = testContext.mock.method(URL, 'revokeObjectURL');
     engine.load(threeSentences);
     sendUnit(workers[0], 1, 0, [1]);
 
@@ -1095,6 +1183,7 @@ test('Engine, audio on iOS', async (testContext) => {
     assert.equal(engine.mediaElement.srcObject, engine.output.connections[0].stream);
     assert.equal(engine.mediaElement.plays, 1);
     assert.ok(events(engine).includes('audio rebuilt (audio suspended, stream ended)'));
+    assert.equal(revokeObjectURL.mock.calls.length, 0);
 
     // Unloading releases it
     const rebuilt = engine.mediaElement;
@@ -1284,7 +1373,7 @@ test('Engine, a unit evicted while it\'s synthesized', async (testContext) => {
     engine.tick();
     workers[0].send({'type': 'unitBlock', 'id': 1, 'unit': 5, 'samples': new Float32Array(250), 'sampleRate': 1000});
     workers[0].send({'type': 'unitDone', 'id': 1, 'unit': 5});
-    assert.deepEqual(engine.session.cache[5], {'blocks': [], 'length': 0, 'done': false, 'run': null, 'startedAt': null});
+    assert.deepEqual(engine.session.cache[5], {'blocks': [], 'length': 0, 'done': false, 'run': null, 'slot': null, 'startedAt': null});
     engine.seekChar(engine.session.units[5].start);
     assert.deepEqual(posted(workers[0], 'units').at(-1).units[0].index, 5);
 });

@@ -207,19 +207,44 @@ test('gutenberg source, load offline', async () => {
 });
 
 
+// A response body that records its cancel
+function cancelableBody() {
+    const body = {'canceled': false};
+    body.stream = new ReadableStream({
+        cancel() {
+            body.canceled = true;
+        }
+    });
+    return body;
+}
+
+
 test('gutenberg source, load not found', async () => {
+    // The error page's body is canceled
+    const body = cancelableBody();
     await withFetch(
-        () => fakeResponse({'status': 404}),
+        () => fakeResponse({'status': 404, 'body': body.stream}),
         async () => {
             await assert.rejects(source.load(book), {
                 'message': 'This book isn\'t available from GITenberg, the Project Gutenberg mirror this app reads.'
             });
         }
     );
+    assert.ok(body.canceled);
 });
 
 
 test('gutenberg source, load error status', async () => {
+    const body = cancelableBody();
+    await withFetch(
+        () => fakeResponse({'status': 503, 'body': body.stream}),
+        async () => {
+            await assert.rejects(source.load(book), {'message': 'The book couldn\'t be downloaded (error 503) - try again later.'});
+        }
+    );
+    assert.ok(body.canceled);
+
+    // Without a body
     await withFetch(
         () => fakeResponse({'status': 503}),
         async () => {
