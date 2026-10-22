@@ -109,16 +109,20 @@ class FakeEngine {
         this.char = startChar;
         this.sentenceChar = startChar;
         this.sentence = 'It is a truth universally acknowledged.';
+        this.onChange(this.state());
     }
 
+    // (the engine tells the app - as the real engine does)
     unload() {
         this.calls.push(['unload']);
         this.text = null;
+        this.onChange(this.state());
     }
 
     setVoice(voice) {
         this.calls.push(['setVoice', voice]);
         this.voice = voice;
+        this.onChange(this.state());
     }
 
     mark(event) {
@@ -127,14 +131,20 @@ class FakeEngine {
 
     play() {
         this.calls.push(['play']);
-        this.playing = true;
-        this.status = 'playing';
+        if (this.text !== null) {
+            this.playing = true;
+            this.status = 'playing';
+            this.onChange(this.state());
+        }
     }
 
     pause() {
         this.calls.push(['pause']);
-        this.playing = false;
-        this.status = 'paused';
+        if (this.playing) {
+            this.playing = false;
+            this.status = 'paused';
+            this.onChange(this.state());
+        }
     }
 
     toggle() {
@@ -148,12 +158,14 @@ class FakeEngine {
 
     skipSentence(direction) {
         this.calls.push(['skipSentence', direction]);
+        this.onChange(this.state());
     }
 
     seekChar(char) {
         this.calls.push(['seekChar', char]);
         this.char = char;
         this.sentenceChar = char;
+        this.onChange(this.state());
     }
 
     state() {
@@ -1423,7 +1435,7 @@ test('main, a saved book without a title', async () => {
     await settle();
     assert.deepEqual(app.saved.books[gutenbergKey], {
         'source': 'gutenberg', 'id': '84', 'title': 'Cached Title', 'author': '', 'char': 0, 'percent': 0, 'cover': null,
-        'updated': app.saved.books[gutenbergKey].updated
+        'updated': app.saved.books[gutenbergKey].updated, 'remaining': 0, 'chapter': ''
     });
     assert.deepEqual(app.engine.calls.at(-1), ['load', 1000, {'voice': 'neural-male', 'rate': 1, 'expressive': true}, 0]);
     app.close();
