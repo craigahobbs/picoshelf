@@ -21,8 +21,8 @@ USE_JSDOM := 1
 include Makefile.base
 
 
-# The catalog tools are linted and covered too
-ESLINT_ARGS := $(ESLINT_ARGS) tools/
+# The catalog tools are linted and covered too, and the service worker is linted
+ESLINT_ARGS := $(ESLINT_ARGS) tools/ static/sw.js
 C8_ARGS := $(C8_ARGS) --src tools/
 
 
@@ -39,8 +39,9 @@ help:
 	@echo '            [app|catalog|run]'
 
 
-# The site, build/app/ - index.html, the app (lib/), the catalog (data/), and PicoVox (the npm package's lib/, in
-# picovox/lib/). A static site can't resolve bare imports, so the app's picovox imports are made relative.
+# The site, build/app/ - index.html, the app (lib/), the catalog (data/), PicoVox (the npm package's lib/, in
+# picovox/lib/), and the service worker (sw.js - the site offline). A static site can't resolve bare imports, so the
+# app's picovox imports are made relative.
 .PHONY: app
 commit: app
 app: build/npm.build
@@ -54,6 +55,27 @@ app: build/npm.build
 		PREFIX=`dirname $$FILE | sed -E -e 's#^build/app/##' -e 's#[^/]+#..#g'`; \
 		sed -E -e "s#(['\"])picovox/#\1$$PREFIX/picovox/#g" $$FILE > $$FILE.tmp && mv $$FILE.tmp $$FILE; \
 	done
+	cp static/sw.js build/app/
+	$(NODE_SHELL) node --input-type=module -e "$$SERVICE_WORKER_SCRIPT"
+
+
+# The service worker's version (a hash of the site's files) and files (the index as "./")
+define SERVICE_WORKER_SCRIPT
+import {readFileSync, readdirSync, statSync, writeFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+const files = readdirSync('build/app', {'recursive': true}).
+    filter((file) => file !== 'sw.js' && statSync(`build/app/$${file}`).isFile()).sort();
+const hash = createHash('sha256');
+for (const file of files) {
+    hash.update(file).update(readFileSync(`build/app/$${file}`));
+}
+const urls = files.map((file) => (file === 'index.html' ? './' : file));
+const worker = readFileSync('build/app/sw.js', 'utf-8').
+    replace("const version = 'development';", `const version = '$${hash.digest('hex').slice(0, 16)}';`).
+    replace('const files = [];', `const files = $${JSON.stringify(urls)};`);
+writeFileSync('build/app/sw.js', worker);
+endef
+export SERVICE_WORKER_SCRIPT
 
 
 # Serve the site locally - http://localhost:8000/

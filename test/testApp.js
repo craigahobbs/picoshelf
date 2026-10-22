@@ -1761,6 +1761,29 @@ test('main, bookmarks sheet', async (context) => {
 });
 
 
+test('main, the service worker', async () => {
+    // Registered (sw.js, beside the page)
+    const registered = [];
+    const register = (rejects) => (app) => {
+        Object.defineProperty(app.window.navigator, 'serviceWorker', {'configurable': true, 'value': {'register': (url) => {
+            registered.push(url);
+            return rejects ? Promise.reject(new Error('SecurityError')) : Promise.resolve({});
+        }}});
+    };
+    let app = startApp({'beforeStart': register(false)});
+    await settle();
+    assert.deepEqual(registered, ['sw.js']);
+    app.close();
+
+    // A failed registration - the app runs online only
+    app = startApp({'beforeStart': register(true)});
+    await settle();
+    assert.deepEqual(registered, ['sw.js', 'sw.js']);
+    assert.equal(app.element('libraryView').hidden, false);
+    app.close();
+});
+
+
 test('main, about sheet', async () => {
     const app = startApp();
     const {element} = app;
