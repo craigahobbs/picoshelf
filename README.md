@@ -30,8 +30,13 @@ chapter - or at the listener's place, if that is in the section.
 The library's authors and genres have links too - the address follows the author or genre last opened in the Library
 (not My Library), so copy it from the address bar:
 
-- `author` - an author's books (`#author=Jane%20Austen`) - the library's Authors view, the author open
-- `genre` - a genre's books, by its key in the catalog's `genres` (`#genre=mystery`) - the Genres view, the genre open
+- `author` - an author's books (`#author=Jane%20Austen`) - the library's Authors view, focused on the author
+- `genre` - a genre's books, by its key in the catalog's `genres` (`#genre=mystery`) - the Genres view, focused on the
+  genre
+
+A link to an author or a genre - pasted, or My Library's and a book's details' "More by" links - shows that group alone,
+under its name and book count, from the top of the page. Its "All authors" (or "All genres") shows every group, the
+linked one open and scrolled to; a search, or another scope or view, also ends the focus.
 
 ## Layout
 
@@ -95,7 +100,8 @@ title, author, and subject, and shown three ways: all its books, by author (by s
 under each), or by genre; an author or a genre opens to its books. A book's info button (or, in the player, its cover)
 shows its details - its description, genres, and subjects, an estimated listening time (at the narrator's default pace),
 and a link to its page at its source - with Listen and More by its author. The book playing is in the player bar at the
-bottom - close it there (×) to stop, its place kept in My Library.
+bottom - close it there (×) to stop, its place kept in My Library. Scrolled far down a long list, a back-to-top button
+appears at the bottom right.
 
 ## PicoVox
 

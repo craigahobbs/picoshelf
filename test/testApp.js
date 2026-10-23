@@ -347,6 +347,19 @@ function startApp({
 }
 
 
+// The library's focus header - its All button, the group's name, and its book count (or null) - or null if not focused
+function focusHead(app) {
+    const head = app.element('results').querySelector('.focus-head');
+    if (head === null) {
+        return null;
+    }
+    return [
+        head.querySelector('button.focus-all').textContent, head.querySelector('.focus-name').textContent,
+        head.querySelector('.focus-count')?.textContent ?? null
+    ];
+}
+
+
 // A saved state with a book open (Pride and Prejudice, at char 350), in a view
 function savedWithBook(view = 'player', extra = {}) {
     return {
@@ -619,10 +632,16 @@ test('main, my library', async () => {
     assert.equal(app.saved.scope, 'library');
     assert.equal(app.saved.libraryView, 'genres');
     assert.equal(app.window.location.hash, '#genre=horror');
+
+    // (the library focused on the genre - the genre alone, from the top of the page)
+    assert.deepEqual(focusHead(app), ['← All genres', 'Horror & Ghost Stories', '2 books']);
+    assert.deepEqual(groups().map((group) => group.dataset.group), ['genres:horror']);
     assert.deepEqual(openGroupNames(), ['Horror & Ghost Stories']);
-    assert.equal(app.scrolledIntoView.at(-1)[0].dataset.group, 'genres:horror');
+    assert.deepEqual(app.scrolls.at(-1), [0, 0]);
+    assert.deepEqual(app.scrolledIntoView, []);
     assert.equal(element('results').querySelector('.group-link'), null);
     app.click(app.tab('scopeTabs', 'My Library'));
+    assert.equal(focusHead(app), null);
 
     // The authors view - an author's link to the author in the library; not for Wikipedia's or anonymous books
     app.click(app.tab('viewTabs', 'Authors'));
@@ -644,11 +663,21 @@ test('main, my library', async () => {
     assert.equal(app.saved.libraryView, 'authors');
     assert.equal(element('search').value, '');
     assert.equal(app.window.location.hash, '#author=Jane%20Austen');
+    assert.deepEqual(focusHead(app), ['← All authors', 'Jane Austen', '1 book']);
     assert.deepEqual(openGroupNames(), ['Jane Austen']);
+    assert.deepEqual(app.scrolls.slice(scrolls), [[0, 0]]);
+    assert.deepEqual(app.scrolledIntoView, []);
 
-    // (scrolled to the author's group - the page not then scrolled back to the top)
-    assert.equal(app.scrolledIntoView.at(-1)[0].dataset.group, 'authors:Jane Austen');
-    assert.equal(app.scrolls.length, scrolls);
+    // All authors - every author, Jane Austen's group open and scrolled to, the address still the author's
+    app.click(element('results').querySelector('.focus-all'));
+    await settle();
+    assert.equal(focusHead(app), null);
+    assert.equal(groups().length, 5);
+    assert.deepEqual(openGroupNames(), ['Jane Austen']);
+    assert.deepEqual(app.scrolledIntoView.map(([item, options]) => [item.dataset.group, options]), [
+        ['authors:Jane Austen', {'block': 'start'}]
+    ]);
+    assert.equal(app.window.location.hash, '#author=Jane%20Austen');
     app.click(app.tab('scopeTabs', 'My Library'));
     app.click(app.tab('viewTabs', 'All'));
 
@@ -1071,21 +1100,53 @@ test('main, resume in the library', async () => {
 
 
 test('main, library links', async () => {
-    // An author's link at startup - the library's authors, the author's group open and scrolled to (once the catalog loads)
+    // An author's link at startup - the library's authors, focused on the author (once the catalog loads)
     const app = startApp({'url': `${appUrl}#author=Jane%20Austen`, 'saved': savedWithBook('library'), 'cached': cachedPride});
     const {element, window} = app;
     const groups = () => [...element('results').querySelectorAll('details.group')];
     const openGroups = () => groups().filter((group) => group.open).map((group) => group.querySelector('.group-name').textContent);
     assert.equal(window.location.hash, '#author=Jane%20Austen');
-    assert.equal(app.scrolledIntoView.length, 0);
+    assert.deepEqual(focusHead(app), ['← All authors', 'Jane Austen', null]);
+    assert.equal(app.text('resultsStatus'), 'Loading the catalog...');
     await settle();
     assert.equal(app.saved.scope, 'library');
     assert.equal(app.saved.libraryView, 'authors');
+    assert.equal(app.tab('viewTabs', 'Authors').getAttribute('aria-selected'), 'true');
+
+    // (the author alone, its books, under the header - from the top of the page)
+    assert.deepEqual(focusHead(app), ['← All authors', 'Jane Austen', '1 book']);
+    assert.equal(app.text('resultsStatus'), '');
+    assert.deepEqual(groups().map((group) => [group.dataset.group, group.className, group.open]), [
+        ['authors:Jane Austen', 'group focused', true]
+    ]);
+    assert.deepEqual(app.rows(), ['Pride and Prejudice']);
+    assert.equal(app.scrolls.at(-1)[1], 0);
+    assert.equal(app.scrolledIntoView.length, 0);
+    assert.equal(window.location.hash, '#author=Jane%20Austen');
+
+    // The All button - a button, before the group's name
+    const all = element('results').querySelector('.focus-head > :first-child');
+    assert.equal(all.tagName, 'BUTTON');
+    assert.equal(all.type, 'button');
+    assert.equal(all.nextElementSibling.tagName, 'H2');
+
+    // All authors - every author, the author's group open and scrolled to, the address still its link
+    app.click(all);
+    await settle();
+    assert.equal(focusHead(app), null);
+    assert.equal(groups().length, 5);
     assert.deepEqual(openGroups(), ['Jane Austen']);
     assert.deepEqual(app.scrolledIntoView.map(([item, options]) => [item.dataset.group, options]), [
         ['authors:Jane Austen', {'block': 'start'}]
     ]);
     assert.equal(window.location.hash, '#author=Jane%20Austen');
+
+    // (re-rendered - not scrolled to again)
+    app.click(app.tab('viewTabs', 'Genres'));
+    app.click(app.tab('viewTabs', 'Authors'));
+    assert.equal(app.scrolledIntoView.length, 1);
+    groups()[0].open = true;
+    await settle();
 
     // Another group opened - the address is its link; closed - no link
     const [, carroll] = groups();
@@ -1117,20 +1178,261 @@ test('main, library links', async () => {
     await settle();
     assert.equal(window.location.hash, '');
 
-    // A genre's link followed (a pasted link) - the library's genres, the genre open
+    // A genre's link followed (a pasted link) - the library's genres, focused on the genre
     window.location.hash = '#genre=romance';
     await settle();
     assert.equal(app.saved.scope, 'library');
     assert.equal(app.saved.libraryView, 'genres');
+    assert.deepEqual(focusHead(app), ['← All genres', 'Romance', '1 book']);
     assert.deepEqual(openGroups(), ['Romance']);
-    assert.equal(app.scrolledIntoView.at(-1)[0].dataset.group, 'genres:romance');
+    assert.equal(app.scrolls.at(-1)[1], 0);
+    assert.equal(app.scrolledIntoView.length, 1);
 
-    // A genre that isn't in the catalog - the genres, nothing open or scrolled to
-    const scrolled = app.scrolledIntoView.length;
+    // A genre that isn't in the catalog - its header (its key), no books
     window.location.hash = '#genre=nonsense';
     await settle();
+    assert.deepEqual(focusHead(app), ['← All genres', 'nonsense', null]);
+    assert.deepEqual(groups(), []);
+    assert.equal(app.text('resultsStatus'), 'No nonsense books.');
+    assert.equal(window.location.hash, '#genre=nonsense');
+
+    // (All genres - the genres, nothing open or scrolled to)
+    app.click(element('results').querySelector('.focus-all'));
+    await settle();
+    assert.equal(focusHead(app), null);
+    assert.equal(groups().length, 3);
     assert.deepEqual(openGroups(), []);
-    assert.equal(app.scrolledIntoView.length, scrolled);
+    assert.equal(app.scrolledIntoView.length, 1);
+    assert.equal(app.text('resultsStatus'), '');
+    assert.equal(window.location.hash, '#genre=nonsense');
+
+    // Wikipedia's genre - its name, no books in the library
+    window.location.hash = '#genre=wikipedia';
+    await settle();
+    assert.deepEqual(focusHead(app), ['← All genres', 'Wikipedia', null]);
+    assert.equal(app.text('resultsStatus'), 'No Wikipedia books.');
+
+    // An author not in the catalog
+    window.location.hash = '#author=Nobody%20Atall';
+    await settle();
+    assert.deepEqual(focusHead(app), ['← All authors', 'Nobody Atall', null]);
+    assert.deepEqual(groups(), []);
+    assert.equal(app.text('resultsStatus'), 'No books by Nobody Atall.');
+    assert.equal(window.location.hash, '#author=Nobody%20Atall');
+    app.close();
+});
+
+
+test('main, library links, the focus ends', async () => {
+    const app = startApp({'url': `${appUrl}#author=Prolific%20Writer`});
+    const {element, window} = app;
+    const groups = () => [...element('results').querySelectorAll('details.group')];
+    await settle();
+    assert.deepEqual(focusHead(app), ['← All authors', 'Prolific Writer', '26 books']);
+    assert.equal(app.rows().length, 24);
+    assert.equal(groups()[0].querySelector('.group-more').hidden, false);
+    assert.equal(element('more').hidden, true);
+
+    // Another link - a new focus
+    window.location.hash = '#author=Lewis%20Carroll';
+    await settle();
+    assert.deepEqual(focusHead(app), ['← All authors', 'Lewis Carroll', '1 book']);
+    assert.deepEqual(app.rows(), ['Alice\'s Adventures in Wonderland']);
+
+    // A search - the whole list's matches (the focus's group still open), after a pause in the typing
+    app.search('shelley');
+    assert.notEqual(focusHead(app), null);
+    app.runTimeouts();
+    assert.equal(focusHead(app), null);
+    assert.equal(app.text('resultsStatus'), '2 books match "shelley" (2 authors).');
+    app.search('');
+    app.runTimeouts();
+    await settle();
+    assert.equal(groups().length, 5);
+    assert.equal(groups()[1].open, true);
+    assert.equal(window.location.hash, '#author=Lewis%20Carroll');
+
+    // A link while a search waits - the search canceled
+    app.search('alice');
+    window.location.hash = '#author=Jane%20Austen';
+    await settle();
+    assert.equal(element('search').value, '');
+    assert.deepEqual(app.runTimeouts(), []);
+    assert.deepEqual(focusHead(app), ['← All authors', 'Jane Austen', '1 book']);
+
+    // The search form - the whole list
+    assert.notEqual(focusHead(app), null);
+    element('searchForm').dispatchEvent(new window.Event('submit', {'cancelable': true}));
+    assert.equal(focusHead(app), null);
+    assert.equal(groups().length, 5);
+
+    // The view tab - the genres, no group open, no link
+    window.location.hash = '#author=Jane%20Austen';
+    await settle();
+    app.click(app.tab('viewTabs', 'Genres'));
+    assert.equal(focusHead(app), null);
+    assert.equal(groups().length, 3);
+    assert.equal(window.location.hash, '');
+    app.click(app.tab('viewTabs', 'Authors'));
+    assert.equal(focusHead(app), null);
+    assert.deepEqual(groups().filter((group) => group.open), []);
+
+    // The scope tab
+    window.location.hash = '#genre=horror';
+    await settle();
+    assert.deepEqual(focusHead(app), ['← All genres', 'Horror & Ghost Stories', '2 books']);
+    app.click(app.tab('scopeTabs', 'My Library'));
+    assert.equal(focusHead(app), null);
+    app.click(app.tab('scopeTabs', 'Library'));
+    assert.equal(focusHead(app), null);
+    assert.equal(groups().length, 3);
+
+    // The selected tab - still focused
+    window.location.hash = '#genre=horror';
+    await settle();
+    app.click(app.tab('viewTabs', 'Genres'));
+    assert.notEqual(focusHead(app), null);
+
+    // Back from the player - still focused
+    app.click(element('results').querySelector('.book-open'));
+    assert.equal(element('playerView').hidden, false);
+    app.click('toLibrary');
+    await settle();
+    assert.deepEqual(focusHead(app), ['← All genres', 'Horror & Ghost Stories', '2 books']);
+    assert.equal(window.location.hash, '#genre=horror');
+
+    // All genres, then a book and back - the genres as they were (the address's link not followed again)
+    app.click(element('results').querySelector('.focus-all'));
+    await settle();
+    app.click(element('results').querySelector('.book-open'));
+    assert.equal(element('playerView').hidden, false);
+    assert.deepEqual(window.history.state, {'view': 'player'});
+    app.click('toLibrary');
+    await settle();
+    assert.equal(element('libraryView').hidden, false);
+    assert.deepEqual(window.history.state, {'view': 'library'});
+    assert.equal(focusHead(app), null);
+    assert.deepEqual(groups().map((group) => [group.dataset.group, group.open]), [
+        ['genres:fiction', false], ['genres:horror', true], ['genres:romance', false]
+    ]);
+    assert.equal(window.location.hash, '#genre=horror');
+
+    // Back to the library's entry, then a link - followed
+    app.click(element('results').querySelector('.book-open'));
+    window.history.replaceState({'view': 'library'}, '');
+    window.dispatchEvent(new window.PopStateEvent('popstate'));
+    assert.equal(element('libraryView').hidden, false);
+    window.location.hash = '#author=Jane%20Austen';
+    await settle();
+    assert.deepEqual(focusHead(app), ['← All authors', 'Jane Austen', '1 book']);
+    app.close();
+});
+
+
+test('main, library links before the catalog loads', async () => {
+    // Focused on the genre once the catalog loads
+    let catalogLoad = deferred();
+    let app = startApp({'url': `${appUrl}#genre=horror`, 'catalogResponse': catalogLoad.promise});
+    await settle();
+    assert.deepEqual(focusHead(app), ['← All genres', 'horror', null]);
+    assert.equal(app.text('resultsStatus'), 'Loading the catalog...');
+    catalogLoad.resolve({'ok': true, 'status': 200, 'json': () => Promise.resolve(structuredClone(testCatalog))});
+    await settle();
+    assert.deepEqual(focusHead(app), ['← All genres', 'Horror & Ghost Stories', '2 books']);
+    assert.equal(app.rows().length, 2);
+    app.close();
+
+    // All genres before it loads - the genres, the genre open and scrolled to once it loads
+    catalogLoad = deferred();
+    app = startApp({'url': `${appUrl}#genre=horror`, 'catalogResponse': catalogLoad.promise});
+    await settle();
+    app.click(app.element('results').querySelector('.focus-all'));
+    assert.equal(focusHead(app), null);
+    assert.equal(app.text('resultsStatus'), 'Loading the catalog...');
+    assert.equal(app.scrolledIntoView.length, 0);
+    catalogLoad.resolve({'ok': true, 'status': 200, 'json': () => Promise.resolve(structuredClone(testCatalog))});
+    await settle();
+    assert.equal(focusHead(app), null);
+    assert.deepEqual(app.scrolledIntoView.map(([item]) => item.dataset.group), ['genres:horror']);
+    assert.equal(app.window.location.hash, '#genre=horror');
+    app.close();
+
+    // The catalog failed - its error
+    app = startApp({'url': `${appUrl}#author=Jane%20Austen`, 'catalogResponse': Promise.reject(new Error('Offline.'))});
+    await settle();
+    assert.deepEqual(focusHead(app), ['← All authors', 'Jane Austen', null]);
+    assert.equal(app.text('resultsStatus'), 'Offline.');
+    app.close();
+});
+
+
+test('main, back to top', async () => {
+    const app = startApp({'load': () => new Promise(() => {
+        // Never loaded
+    })});
+    const {element, window} = app;
+    const toTop = element('toTop');
+    await settle();
+    const scroll = (scrollY, innerHeight = 800) => {
+        Object.defineProperty(window, 'scrollY', {'value': scrollY, 'configurable': true});
+        Object.defineProperty(window, 'innerHeight', {'value': innerHeight, 'configurable': true});
+        window.dispatchEvent(new window.Event('scroll'));
+    };
+
+    // The button - hidden at the top, not above the mini player (none)
+    assert.equal(toTop.tagName, 'BUTTON');
+    assert.equal(toTop.type, 'button');
+    assert.equal(toTop.getAttribute('aria-label'), 'Back to top');
+    assert.equal(toTop.title, 'Back to top');
+    assert.equal(toTop.querySelector('use').getAttribute('href'), '#i-up');
+    assert.equal(toTop.hidden, true);
+    assert.equal(toTop.classList.contains('above-mini-player'), false);
+
+    // Scrolled down - shown past 1.5 screens, once a frame
+    scroll(1200);
+    assert.equal(app.frames.length, 1);
+    scroll(1201);
+    assert.equal(app.frames.length, 1);
+    assert.equal(toTop.hidden, true);
+    app.runFrames();
+    assert.equal(toTop.hidden, false);
+    scroll(1200);
+    app.runFrames();
+    assert.equal(toTop.hidden, true);
+    scroll(1000, 600);
+    app.runFrames();
+    assert.equal(toTop.hidden, false);
+
+    // Clicked - a smooth scroll to the top
+    app.click(toTop);
+    assert.deepEqual(app.scrolls.at(-1), [{'top': 0, 'behavior': 'smooth'}, undefined]);
+    scroll(0);
+    app.runFrames();
+    assert.equal(toTop.hidden, true);
+
+    // The player - hidden (scrolled or not)
+    scroll(3000);
+    app.runFrames();
+    assert.equal(toTop.hidden, false);
+    element('results').querySelector('.book-open').click();
+    assert.equal(element('playerView').hidden, false);
+    assert.equal(toTop.hidden, true);
+    scroll(3000);
+    app.runFrames();
+    assert.equal(toTop.hidden, true);
+
+    // Back to the library, scrolled down - shown, above the mini player
+    app.click('toLibrary');
+    await settle();
+    assert.equal(element('miniPlayer').hidden, false);
+    assert.equal(toTop.hidden, false);
+    assert.equal(toTop.classList.contains('above-mini-player'), true);
+
+    // The book closed - no mini player
+    app.click(element('miniPlayerInner').querySelector('.icon-button'));
+    assert.equal(element('miniPlayer').hidden, true);
+    assert.equal(toTop.classList.contains('above-mini-player'), false);
+    assert.equal(toTop.hidden, false);
     app.close();
 });
 
@@ -1145,8 +1447,10 @@ test('main, library links with a book open', async () => {
     assert.equal(element('libraryView').hidden, false);
     assert.equal(element('miniPlayer').hidden, false);
     assert.equal(window.location.hash, '#author=Mary%20Shelley');
+    assert.deepEqual(focusHead(app), ['← All authors', 'Mary Shelley', '1 book']);
     assert.deepEqual([...element('results').querySelectorAll('details.group[open] .group-name')].map((name) => name.textContent),
         ['Mary Shelley']);
+    assert.deepEqual(app.scrolls.at(-1), [0, 0]);
     app.close();
 
     // At startup with the listener's book - the group, the book open in the mini player
@@ -1156,6 +1460,7 @@ test('main, library links with a book open', async () => {
     assert.equal(app2.element('playerView').hidden, true);
     assert.equal(app2.element('miniPlayer').hidden, false);
     assert.equal(app2.window.location.hash, '#genre=horror');
+    assert.deepEqual(focusHead(app2), ['← All genres', 'Horror & Ghost Stories', '2 books']);
     app2.close();
 });
 
@@ -2172,6 +2477,7 @@ test('main, book details sheet actions', async () => {
     assert.equal(window.location.hash, '#author=Karl%20Marx');
     const openGroups = [...element('results').querySelectorAll('details.group')].filter((group) => group.open);
     assert.deepEqual(openGroups.map((group) => group.dataset.group), ['authors:Karl Marx']);
+    assert.deepEqual(focusHead(app), ['← All authors', 'Karl Marx', '1 book']);
     app.close();
 });
 
@@ -2330,6 +2636,7 @@ test('main, book details sheet from the player\'s cover', async () => {
     assert.equal(element('playerView').hidden, true);
     assert.equal(element('libraryView').hidden, false);
     assert.equal(app.window.location.hash, '#author=Jane%20Austen');
+    assert.deepEqual(focusHead(app), ['← All authors', 'Jane Austen', '1 book']);
     app.close();
 });
 
