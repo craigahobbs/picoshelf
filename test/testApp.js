@@ -620,6 +620,7 @@ test('main, my library', async () => {
     assert.equal(app.saved.libraryView, 'genres');
     assert.equal(app.window.location.hash, '#genre=horror');
     assert.deepEqual(openGroupNames(), ['Horror & Ghost Stories']);
+    assert.equal(app.scrolledIntoView.at(-1)[0].dataset.group, 'genres:horror');
     assert.equal(element('results').querySelector('.group-link'), null);
     app.click(app.tab('scopeTabs', 'My Library'));
 
@@ -636,15 +637,18 @@ test('main, my library', async () => {
         ['Mary Wollstonecraft Shelley', 'More by Mary Wollstonecraft Shelley in the Library'],
         ['Wikipedia', null]
     ]);
+    const scrolls = app.scrolls.length;
     app.click(groups()[0].querySelector('.group-link'));
     await settle();
     assert.equal(app.saved.scope, 'library');
     assert.equal(app.saved.libraryView, 'authors');
     assert.equal(element('search').value, '');
     assert.equal(app.window.location.hash, '#author=Jane%20Austen');
-    assert.deepEqual(app.scrolls.at(-1), [0, 0]);
     assert.deepEqual(openGroupNames(), ['Jane Austen']);
+
+    // (scrolled to the author's group - the page not then scrolled back to the top)
     assert.equal(app.scrolledIntoView.at(-1)[0].dataset.group, 'authors:Jane Austen');
+    assert.equal(app.scrolls.length, scrolls);
     app.click(app.tab('scopeTabs', 'My Library'));
     app.click(app.tab('viewTabs', 'All'));
 
