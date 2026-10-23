@@ -592,13 +592,14 @@ export function isReferenceWork(result) {
 // duplicates, or less popular editions of a book - each a catalog book (without its rank, words, and text) with its
 // downloads
 export function gutenbergCandidates(records, seBooks, repositories, options) {
-    // Standard Ebooks' titles, by author surname
-    const seTitles = new Map();
+    // Standard Ebooks' books, by author surname
+    const seByAuthor = new Map();
     for (const book of seBooks) {
         for (const surname of surnameKeys(book.author)) {
-            seTitles.set(surname, [...(seTitles.get(surname) ?? []), book.title]);
+            seByAuthor.set(surname, [...(seByAuthor.get(surname) ?? []), book]);
         }
     }
+    const seDownloads = new Map();
     const candidates = [];
     const fullTitles = new Set();
     let notInGitenberg = 0;
@@ -606,8 +607,20 @@ export function gutenbergCandidates(records, seBooks, repositories, options) {
     let gutenbergDuplicates = 0;
     let referenceWorks = 0;
     for (const record of records) {
+        // A Standard Ebooks book's edition - its downloads are the Standard Ebooks book's popularity (every record's,
+        // past the candidates too)
+        const {title, subtitle} = gutenbergTitle(record.title);
+        const author = record.authors.map((person) => gutenbergAuthor(person.name)).filter((name) => name !== '').join(', ');
+        const workTitle = subtitle === '' ? title : `${title} ${subtitle}`;
+        const seBook = surnameKeys(author).flatMap((surname) => seByAuthor.get(surname) ?? []).
+            find((book) => isSameWork(workTitle, book.title));
+        if (seBook !== undefined) {
+            seDownloads.set(seBook.id, (seDownloads.get(seBook.id) ?? 0) + record.download_count);
+            seDuplicates += candidates.length < options.gutenberg ? 1 : 0;
+            continue;
+        }
         if (candidates.length >= options.gutenberg) {
-            break;
+            continue;
         }
         if (!repositories.has(String(record.id))) {
             notInGitenberg++;
@@ -615,13 +628,6 @@ export function gutenbergCandidates(records, seBooks, repositories, options) {
         }
         if (isReferenceWork(record)) {
             referenceWorks++;
-            continue;
-        }
-        const {title, subtitle} = gutenbergTitle(record.title);
-        const author = record.authors.map((person) => gutenbergAuthor(person.name)).filter((name) => name !== '').join(', ');
-        const workTitle = subtitle === '' ? title : `${title} ${subtitle}`;
-        if (surnameKeys(author).some((surname) => (seTitles.get(surname) ?? []).some((seTitle) => isSameWork(workTitle, seTitle)))) {
-            seDuplicates++;
             continue;
         }
         const fullTitle = `${normalizeText(`${title} ${subtitle}`)}|${normalizeText(author)}`;
@@ -640,12 +646,30 @@ export function gutenbergCandidates(records, seBooks, repositories, options) {
             'subjects': gutenbergSubjects(record),
             'language': 'en',
             'cover': record.formats['image/jpeg'] ?? null,
-            'downloads': record.download_count
+            'downloads': record.download_count,
+            'notable': isNotable(record),
+            'serial': isSerial(record)
         });
     }
     log(`Gutenberg: ${candidates.length} candidates (${notInGitenberg} not in GITenberg, ${seDuplicates} Standard Ebooks ` +
         `duplicates, ${gutenbergDuplicates} duplicate editions, ${referenceWorks} reference works)`);
-    return candidates;
+    return {candidates, seDownloads};
+}
+
+
+// Is a Gutenberg record a notable book - one with a Wikipedia page (Project Gutenberg links a notable book's), or on
+// one of its curated bookshelves?
+const curatedShelfRegex = /^(?:Category: Classics of Literature|Best Books Ever Listings|Harvard Classics|Banned Books)/;
+export function isNotable(record) {
+    return record.wikipedia !== null || record.bookshelves.some((shelf) => curatedShelfRegex.test(shelf));
+}
+
+
+// Is a Gutenberg record a part of a serial - a periodical's issue, or a work's volume after its first ("Vol. 2 (of 3)",
+// "Volume II", "Volume 02")?
+const laterVolumeRegex = /\bvol(?:ume)?\.?\s*(?:0*[2-9]|0*[1-9]\d+|I[IVX]+|V|VI{1,3}|IX|X[IVX]*)\b/i;
+export function isSerial(record) {
+    return record.subjects.some((subject) => /\bPeriodicals$/.test(subject)) || laterVolumeRegex.test(record.title);
 }
 
 
@@ -824,10 +848,13 @@ export async function chooseGutenberg(seBooks, candidates, genres, repositories,
         genre, (seCounts[genre] ?? 0) + popularCount
     ]));
     const quotas = genreQuotas(weights, fixed, options.books, genreFloor);
+    // (only notable books, and no serials - the long tail's downloads are noisy, and its unknown books often dry
+    // reading; the room left goes to the notable books of every genre, then the others, by downloads)
+    const balanced = candidates.filter((book) => !book.serial).sort((first, second) => Number(second.notable) - Number(first.notable));
     await Promise.all(Object.keys(quotas).map((genre) => accept(
-        candidates.filter((book) => primary(book) === genre && !checks.has(book.id)), quotas[genre] - fixed[genre]
+        balanced.filter((book) => book.notable && primary(book) === genre && !checks.has(book.id)), quotas[genre] - fixed[genre]
     )));
-    await accept(candidates.filter((book) => !checks.has(book.id)), options.books - seBooks.length - chosen.size);
+    await accept(balanced.filter((book) => !checks.has(book.id)), options.books - seBooks.length - chosen.size);
     writeFileAtomic(join(cacheDir, textCacheName), JSON.stringify(textCache));
 
     // Each genre's coverage
@@ -838,19 +865,50 @@ export async function chooseGutenberg(seBooks, candidates, genres, repositories,
             `Standard Ebooks, ${genreStats.chosen} Gutenberg of ${genreStats.tried} tried${reasons === '' ? '' : ` (${reasons})`}`);
     }
 
-    // The books, most downloaded first
-    return candidates.filter((book) => chosen.has(book)).map((candidate, index) => {
+    // The books, most downloaded first (rankBooks ranks them with the Standard Ebooks books - by their downloads)
+    return candidates.filter((book) => chosen.has(book)).map((candidate) => {
         const book = {...candidate};
-        delete book.downloads;
+        delete book.notable;
+        delete book.serial;
         const text = chosen.get(candidate);
         return {
             ...book,
-            'rank': index + 1,
             'words': text.words,
             'text': {
                 'url': `${gitenbergRawURL}${text.repository}/master/${text.file}`, 'format': 'gutenberg-text', 'encoding': text.encoding
             }
         };
+    });
+}
+
+
+// Rank the catalog's books on one scale - their Gutenberg downloads: a Gutenberg book's own, a Standard Ebooks book's
+// its Gutenberg editions' (seDownloads, by id), else the lower of its nearest known neighbors' in Standard Ebooks'
+// popularity order (a book with no Gutenberg edition is seldom a famous one) - most first; the books ranked (rank),
+// without their downloads
+export function rankBooks(seBooks, gutenbergBooks, seDownloads) {
+    const known = seBooks.map((book) => seDownloads.get(book.id) ?? null);
+    const before = [];
+    let last = null;
+    for (const downloads of known) {
+        last = downloads ?? last;
+        before.push(last);
+    }
+    const after = [];
+    last = null;
+    for (const downloads of [...known].reverse()) {
+        last = downloads ?? last;
+        after.unshift(last);
+    }
+    const seScored = seBooks.map((book, ix) => {
+        const neighbors = [before[ix], after[ix]].filter((downloads) => downloads !== null);
+        return {book, 'downloads': known[ix] ?? (neighbors.length > 0 ? Math.min(...neighbors) : 0)};
+    });
+    const scored = [...seScored, ...gutenbergBooks.map((book) => ({book, 'downloads': book.downloads}))];
+    return scored.sort((first, second) => second.downloads - first.downloads).map(({book}, index) => {
+        const ranked = {...book, 'rank': index + 1};
+        delete ranked.downloads;
+        return ranked;
     });
 }
 
@@ -875,13 +933,13 @@ export async function buildCatalog(options) {
     const [seBooks, records, repositories] = await Promise.all([
         standardEbooks(options), options.gutenberg > 0 ? gutenbergRecords(options) : [], gitenbergRepositories(options)
     ]);
-    const candidates = gutenbergCandidates(records, seBooks, repositories, options);
+    const {candidates, seDownloads} = gutenbergCandidates(records, seBooks, repositories, options);
 
     // Every book's genres (the Gutenberg candidates' too - the genres choose them), the Gutenberg books, and the books'
     // narrators
     const genres = await bookGenres([...seBooks, ...candidates], {'model': options.voiceModel, log});
     const gutenberg = await chooseGutenberg(seBooks, candidates, genres, repositories, options);
-    const books = [...seBooks, ...gutenberg];
+    const books = rankBooks(seBooks, gutenberg, seDownloads);
     const voices = await castBooks(books, {'model': options.voiceModel, log});
     const catalog = {
         'version': 1,

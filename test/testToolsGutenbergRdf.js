@@ -18,6 +18,10 @@ const frankensteinRecord = rdfRecord(84, {
     'creators': ['Shelley, Mary Wollstonecraft', 'Godwin, William &amp; Sons'],
     'rights': 'Public domain in the USA.',
     'downloads': 144008,
+    'descriptions': [
+        'Wikipedia page about this book: https://en.wikipedia.org/wiki/Frankenstein',
+        'There are improved editions of this title, eBook #41445 (1818 ed.) and #42324 (1831 ed.).'
+    ],
     'summaries': [
         '"Frankenstein; Or, The Modern Prometheus" by Mary Wollstonecraft Shelley is a Gothic novel. ' +
             '(This is an automatically generated summary.)',
@@ -66,7 +70,8 @@ const frankenstein = {
         'Another <summary>.'
     ],
     'download_count': 144008,
-    'text_bytes': 448885
+    'text_bytes': 448885,
+    'wikipedia': 'https://en.wikipedia.org/wiki/Frankenstein'
 };
 
 
@@ -146,8 +151,26 @@ test('parseRecord, empty', () => {
         'formats': {},
         'summaries': [],
         'download_count': 0,
-        'text_bytes': null
+        'text_bytes': null,
+        'wikipedia': null
     });
+});
+
+
+test('parseRecord, wikipedia', () => {
+    const wikipedia = (descriptions) => parseRecord(rdfRecord(6, {descriptions})).wikipedia;
+
+    // The Wikipedia link - after another description, and its first
+    assert.equal(wikipedia([
+        'There are improved editions of this title, eBook #41445.',
+        'Wikipedia page about this book: https://en.wikipedia.org/wiki/Walden',
+        'Wikipedia page about this book: https://en.wikipedia.org/wiki/Other'
+    ]), 'https://en.wikipedia.org/wiki/Walden');
+
+    // Only other descriptions - or a Wikipedia mention that isn't the link
+    assert.equal(wikipedia(['There are improved editions of this title, eBook #41445.']), null);
+    assert.equal(wikipedia(['See the Wikipedia page about this book: https://en.wikipedia.org/wiki/Walden']), null);
+    assert.equal(wikipedia([]), null);
 });
 
 

@@ -308,12 +308,13 @@ function gutenbergRecord(id, title, author, downloads) {
         },
         'summaries': [`"${title}" by ${author} is a book about ${title.toLowerCase()}.`],
         'download_count': downloads,
-        'text_bytes': 1000
+        'text_bytes': 1000,
+        'wikipedia': null
     };
 }
 
 
-// A Gutenberg candidate (gutenbergCandidates's)
+// A Gutenberg candidate (gutenbergCandidates's) - neither notable nor a serial
 function gutenbergCandidate(id, title, author, downloads, more = {}) {
     return {
         'source': 'gutenberg',
@@ -325,6 +326,8 @@ function gutenbergCandidate(id, title, author, downloads, more = {}) {
         'language': 'en',
         'cover': `https://www.gutenberg.org/cache/epub/${id}/pg${id}.cover.medium.jpg`,
         downloads,
+        'notable': false,
+        'serial': false,
         ...more
     };
 }
@@ -376,36 +379,56 @@ test('gutenbergRecords', async () => {
 
 
 test('gutenbergCandidates', async () => {
+    const prideSE = '/ebooks/jane-austen/pride-and-prejudice';
+    const eyreSE = '/ebooks/charlotte-bronte/jane-eyre';
     const records = [
         gutenbergRecord(1001, 'A Dictionary of the English Language', 'Johnson, Samuel', 900),
         gutenbergRecord(1342, 'Pride and Prejudice', 'Austen, Jane', 800),
-        gutenbergRecord(84, 'Frankenstein; Or, The Modern Prometheus', 'Shelley, Mary Wollstonecraft', 700),
+        {...gutenbergRecord(84, 'Frankenstein; Or, The Modern Prometheus', 'Shelley, Mary Wollstonecraft', 700),
+            'wikipedia': 'https://en.wikipedia.org/wiki/Frankenstein'},
         gutenbergRecord(41445, 'Frankenstein; or, the modern prometheus', 'Shelley, Mary Wollstonecraft', 600),
+        // (a Standard Ebooks book's edition that isn't in GITenberg - a duplicate, its downloads counted)
+        gutenbergRecord(42671, 'Pride and Prejudice', 'Austen, Jane', 550),
         gutenbergRecord(60000, 'Not in GITenberg', 'Writer, A', 500),
         {
             ...gutenbergRecord(11, 'Anonymous', 'Writer, A', 400),
             'authors': [], 'summaries': [], 'formats': {'text/plain': 'https://www.gutenberg.org/ebooks/11.txt'},
             'bookshelves': ['Category: Novels']
         },
-        gutenbergRecord(2701, 'Moby Dick', 'Melville, Herman', 300),
-        gutenbergRecord(12, 'Past the Candidates', 'Writer, A', 200)
+        gutenbergRecord(13, 'The History of England, Vol. 2 (of 6)', 'Hume, David', 300),
+        {...gutenbergRecord(2701, 'Moby Dick', 'Melville, Herman', 250), 'bookshelves': ['Best Books Ever Listings']},
+        gutenbergRecord(12, 'Past the Candidates', 'Writer, A', 200),
+        // (a Standard Ebooks book's edition past the candidates - its downloads counted, not its duplicate)
+        gutenbergRecord(1260, 'Jane Eyre: An Autobiography', 'Brontë, Charlotte', 150)
     ];
-    const repositories = new Map([1001, 1342, 84, 41445, 11, 2701, 12].map((id) => [String(id), `Book_${id}`]));
-    const seBooks = [{'title': 'Pride and Prejudice', 'author': 'Jane Austen'}];
-    let candidates;
+    const repositories = new Map([1001, 1342, 84, 41445, 11, 13, 2701, 12, 1260].map((id) => [String(id), `Book_${id}`]));
+    const seBooks = [
+        {'id': prideSE, 'title': 'Pride and Prejudice', 'author': 'Jane Austen'},
+        {'id': eyreSE, 'title': 'Jane Eyre', 'author': 'Charlotte Brontë'},
+        {'id': '/ebooks/henry-david-thoreau/walden', 'title': 'Walden', 'author': 'Henry David Thoreau'}
+    ];
+    let result;
     const {output} = await withSite({}, () => {
-        candidates = gutenbergCandidates(records, seBooks, repositories, {'gutenberg': 3});
+        result = gutenbergCandidates(records, seBooks, repositories, {'gutenberg': 4});
     });
-    assert.deepEqual(candidates, [
+    assert.deepEqual(result.candidates, [
         gutenbergCandidate(84, 'Frankenstein', 'Mary Wollstonecraft Shelley', 700, {
             'subtitle': 'Or, The Modern Prometheus',
-            'description': 'A book about frankenstein; or, the modern prometheus.'
+            'description': 'A book about frankenstein; or, the modern prometheus.',
+            'notable': true
         }),
         gutenbergCandidate(11, 'Anonymous', '', 400, {'description': '', 'subjects': ['Fiction', 'Novels'], 'cover': null}),
-        gutenbergCandidate(2701, 'Moby Dick', 'Herman Melville', 300)
+        gutenbergCandidate(13, 'The History of England, Vol. 2 (of 6)', 'David Hume', 300, {
+            'description': 'A book about the history of england, vol. 2 (of 6).',
+            'serial': true
+        }),
+        gutenbergCandidate(2701, 'Moby Dick', 'Herman Melville', 250, {'notable': true})
     ]);
+
+    // The Standard Ebooks books' downloads - their editions' summed (Walden has none)
+    assert.deepEqual(result.seDownloads, new Map([[prideSE, 1350], [eyreSE, 150]]));
     assert.deepEqual(output, [
-        'Gutenberg: 3 candidates (1 not in GITenberg, 1 Standard Ebooks duplicates, 1 duplicate editions, 1 reference works)'
+        'Gutenberg: 4 candidates (1 not in GITenberg, 2 Standard Ebooks duplicates, 1 duplicate editions, 1 reference works)'
     ]);
 });
 
@@ -464,19 +487,19 @@ test('chooseGutenberg', async () => {
         books = await chooseGutenberg(seBooks, candidates, genres, repositories, options);
     });
 
-    // The books - general fiction's 27 passing texts and 48 mysteries' (the quota's 40 - 205's replaced by 241 - and 8
-    // of the remaining 9 filling the catalog), most downloaded first
+    // The books - general fiction's 27 passing texts and 48 mysteries' (none notable, so the genres' quotas take none and
+    // the catalog's room takes every candidate that passes), most downloaded first - with their downloads (rankBooks
+    // ranks them), without their notable and serial flags
     const chosen = [
         ...fiction.filter((book) => !['103', '110', '120'].includes(book.id)),
         ...mysteries.filter((book) => !['205', '245'].includes(book.id))
     ];
     assert.deepEqual(books.map((book) => book.id), chosen.map((book) => book.id));
-    assert.deepEqual(books.map((book) => book.rank), chosen.map((book, ix) => ix + 1));
-    const [{downloads, ...first}] = fiction;
-    assert.equal(downloads, 150);
+    assert.deepEqual(books.map((book) => book.downloads), chosen.map((book) => book.downloads));
+    const [{notable, serial, ...first}] = fiction;
+    assert.deepEqual([notable, serial], [false, false]);
     assert.deepEqual(books[0], {
         ...first,
-        'rank': 1,
         'words': 1234,
         'text': {'url': rawURL('Book_101', '101.txt'), 'format': 'gutenberg-text', 'encoding': 'windows-1252'}
     });
@@ -506,6 +529,55 @@ test('chooseGutenberg', async () => {
     };
     assert.deepEqual(output, [
         'Gutenberg: 0 popular books (of the top 0 candidates)',
+        ...genreKeys.map((genre) => coverage[genre] ?? `  ${genre}: 0 books of 40 - 0 Standard Ebooks, 0 Gutenberg of 0 tried`)
+    ]);
+});
+
+
+test('chooseGutenberg, notable books first, no serials', async () => {
+    resetCache();
+
+    // Forty-one Standard Ebooks mysteries - more than the mysteries' quota, so its notable candidate is left to the
+    // catalog's room
+    const seBooks = Array.from({'length': 41}, (unused, ix) => ({'source': 'standardebooks', 'id': `/ebooks/a/mystery-${ix + 1}`}));
+
+    // The candidates, most downloaded first - a serial (the most popular), a notable serial, five general fiction books,
+    // three notable general fiction books (fewer downloads), and a notable mystery (the fewest)
+    const candidates = [
+        gutenbergCandidate(501, 'Fiction, Vol. 2', 'A Writer', 1000, {'serial': true}),
+        gutenbergCandidate(502, 'Notable Fiction, Vol. 2', 'A Writer', 900, {'notable': true, 'serial': true}),
+        ...Array.from({'length': 5}, (unused, ix) => gutenbergCandidate(601 + ix, `Fiction ${ix + 1}`, 'A Writer', 500)),
+        ...[30, 20, 10].map((downloads, ix) => gutenbergCandidate(701 + ix, `Notable ${ix + 1}`, 'A Writer', downloads, {'notable': true})),
+        gutenbergCandidate(801, 'Notable Mystery', 'A Writer', 5, {'notable': true})
+    ];
+    const isMystery = (book) => book.id.includes('mystery') || book.id === '801';
+    const genres = bookGenreKeys([...seBooks, ...candidates], (book) => (isMystery(book) ? 'mystery' : 'fiction'));
+    const repositories = new Map(candidates.map((book) => [book.id, `Book_${book.id}`]));
+    let books;
+    const {calls, output} = await withSite(() => new Response(gutenbergFile()), async () => {
+        const options = {'books': 47, 'popular': 1, 'maxAge': 30, 'cacheOnly': false};
+        books = await chooseGutenberg(seBooks, candidates, genres, repositories, options);
+    });
+
+    // The popular serial; general fiction's quota of 40 takes only its notable books, by downloads - not the notable
+    // serial; and the catalog's room of 2 takes the notable mystery before the most downloaded general fiction book
+    assert.deepEqual(calls.map(([url]) => url), [
+        rawURL('Book_501', '501-0.txt'),
+        rawURL('Book_701', '701-0.txt'), rawURL('Book_702', '702-0.txt'), rawURL('Book_703', '703-0.txt'),
+        rawURL('Book_801', '801-0.txt'), rawURL('Book_601', '601-0.txt')
+    ]);
+    assert.deepEqual(books.map((book) => [book.id, book.downloads]), [
+        ['501', 1000], ['601', 500], ['701', 30], ['702', 20], ['703', 10], ['801', 5]
+    ]);
+    assert.deepEqual(Object.keys(books[0]), [
+        'source', 'id', 'title', 'author', 'description', 'subjects', 'language', 'cover', 'downloads', 'words', 'text'
+    ]);
+    const coverage = {
+        'fiction': '  fiction: 5 books of 40 - 0 Standard Ebooks, 5 Gutenberg of 5 tried',
+        'mystery': '  mystery: 42 books of 41 - 41 Standard Ebooks, 1 Gutenberg of 1 tried'
+    };
+    assert.deepEqual(output, [
+        'Gutenberg: 1 popular books (of the top 1 candidates)',
         ...genreKeys.map((genre) => coverage[genre] ?? `  ${genre}: 0 books of 40 - 0 Standard Ebooks, 0 Gutenberg of 0 tried`)
     ]);
 });
@@ -586,11 +658,17 @@ const ollama = fakeOllama((name) => ({
 })[name]);
 
 
-// Gutenberg's catalog - Frankenstein (its UTF-8 text passes), Pride and Prejudice (a Standard Ebooks book), Moby Dick
-// (its text is too short), and A Tale of Two Cities (its plain text is Windows-1252), most downloaded first
+// Gutenberg's catalog - Frankenstein (notable - its UTF-8 text passes), Pride and Prejudice (a Standard Ebooks book's
+// edition - its downloads rank the Standard Ebooks book), Moby Dick (its text is too short), and A Tale of Two Cities
+// (its plain text is Windows-1252)
 const catalogRecords = [
-    gutenbergRDF(1342, 'Pride and Prejudice', 'Austen, Jane', 600),
-    gutenbergRDF(84, 'Frankenstein; or, the modern prometheus', 'Shelley, Mary Wollstonecraft', 500),
+    gutenbergRDF(1342, 'Pride and Prejudice', 'Austen, Jane', 450),
+    gutenbergRDF(84, 'Frankenstein; or, the modern prometheus', 'Shelley, Mary Wollstonecraft', 500, {
+        'descriptions': [
+            'Wikipedia page about this book: https://en.wikipedia.org/wiki/Frankenstein',
+            'There are improved editions of this title, eBook #41445 (1818 ed.) and #42324 (1831 ed.).'
+        ]
+    }),
     gutenbergRDF(2701, 'Moby Dick; Or, The Whale', 'Melville, Herman', 400),
     gutenbergRDF(98, 'A Tale of Two Cities', 'Dickens, Charles', 300)
 ];
@@ -640,10 +718,12 @@ test('buildCatalog', async () => {
     assert.match(catalog.generated, /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/);
     assert.deepEqual(Object.keys(catalog.sources), ['standardebooks', 'gutenberg']);
     assert.deepEqual(catalog.genres, genreNames());
+    // The books ranked by their Gutenberg downloads - Frankenstein's 500, Pride and Prejudice's edition's 450, and A Tale
+    // of Two Cities' 300
     const bookGenres = [genreKeys[1], genreKeys[0]];
     assert.deepEqual(catalog.books, [
-        {...prideBook, 'voice': 'helen', 'genres': bookGenres},
         {...frankensteinBook, 'voice': 'helen', 'genres': bookGenres},
+        {...prideBook, 'rank': 2, 'voice': 'helen', 'genres': bookGenres},
         {
             'source': 'gutenberg',
             'id': '98',
@@ -653,7 +733,7 @@ test('buildCatalog', async () => {
             'subjects': ['Fiction'],
             'language': 'en',
             'cover': 'https://www.gutenberg.org/cache/epub/98/pg98.cover.medium.jpg',
-            'rank': 2,
+            'rank': 3,
             'words': 742,
             'text': {'url': rawURL('A-Tale-of-Two-Cities_98', '98.txt'), 'format': 'gutenberg-text', 'encoding': 'windows-1252'},
             'voice': 'helen',
@@ -668,8 +748,8 @@ test('buildCatalog', async () => {
         ['Frankenstein: Or, the Modern Prometheus', ['genre']],
         ['Moby Dick: Or, The Whale', ['genre']],
         ['A Tale of Two Cities', ['genre']],
-        ['Pride and Prejudice', ['voice']],
         ['Frankenstein: Or, the Modern Prometheus', ['voice']],
+        ['Pride and Prejudice', ['voice']],
         ['A Tale of Two Cities', ['voice']]
     ]);
     assert.equal(systemone[0].model, 'test:1b');
@@ -746,9 +826,9 @@ test('catalog.js, command line', async () => {
     ]);
     assert.match(lines.at(-1), /catalog\.json: 1 Standard Ebooks and 1 Gutenberg books, \d+ bytes$/);
     const catalog = JSON.parse(readFileSync(output, 'utf-8'));
-    assert.deepEqual(catalog.books.map((book) => [book.id, book.title, book.author, book.words, book.voice]), [
-        [prideId, 'Pride and Prejudice', 'Jane Austen', 122000, 'helen'],
-        ['84', 'Frankenstein', 'Mary Wollstonecraft Shelley', 740, 'helen']
+    assert.deepEqual(catalog.books.map((book) => [book.id, book.title, book.author, book.rank, book.words, book.voice]), [
+        ['84', 'Frankenstein', 'Mary Wollstonecraft Shelley', 1, 740, 'helen'],
+        [prideId, 'Pride and Prejudice', 'Jane Austen', 2, 122000, 'helen']
     ]);
     assert.deepEqual(
         server.requests.map(([, url]) => url),

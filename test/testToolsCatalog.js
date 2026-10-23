@@ -11,9 +11,8 @@ import process from 'node:process';
 // The tools - imported after toolsHelpers.js sets their cache directory
 const {
     catalogJSON, collapseSpace, fetchCached, fetchFile, fetchRetry, genreQuotas, gitenbergRepositories, gutenbergAuthor,
-    gutenbergDescription, gutenbergSubjects, gutenbergText, gutenbergTitle, isReferenceWork, isSameWork, log, parseArgs, services,
-    surnameKeys,
-    titleCase, titleKey, trimDescription, uniqueSubjects
+    gutenbergDescription, gutenbergSubjects, gutenbergText, gutenbergTitle, isNotable, isReferenceWork, isSameWork, isSerial, log,
+    parseArgs, rankBooks, services, surnameKeys, titleCase, titleKey, trimDescription, uniqueSubjects
 } = await import('../tools/catalog.js');
 const {qualityVersion} = await import('../tools/quality.js');
 
@@ -237,6 +236,105 @@ test('isReferenceWork', () => {
     assert.equal(isReferenceWork({'title': 'The Encyclopaedia Britannica', 'subjects': []}), true);
     assert.equal(isReferenceWork({'title': 'Words', 'subjects': ['English language -- Dictionaries']}), true);
     assert.equal(isReferenceWork({'title': 'Moby Dick', 'subjects': ['Whaling -- Fiction', 'Sea stories']}), false);
+});
+
+
+test('isNotable', () => {
+    const notable = (wikipedia, bookshelves) => isNotable({wikipedia, bookshelves});
+
+    // A Wikipedia page
+    assert.equal(notable('https://en.wikipedia.org/wiki/Frankenstein', []), true);
+
+    // A curated bookshelf
+    assert.equal(notable(null, ['Gothic Fiction', 'Category: Classics of Literature']), true);
+    assert.equal(notable(null, ['Best Books Ever Listings']), true);
+    assert.equal(notable(null, ['Harvard Classics']), true);
+    assert.equal(notable(null, ['Banned Books from Anne Haight\'s list']), true);
+
+    // Neither - another shelf, or a curated shelf's name inside another's
+    assert.equal(notable(null, []), false);
+    assert.equal(notable(null, ['Category: Novels', 'Gothic Fiction']), false);
+    assert.equal(notable(null, ['Not Harvard Classics']), false);
+});
+
+
+test('isSerial', () => {
+    const serial = (title, subjects = []) => isSerial({title, subjects});
+
+    // A volume after the first - each form
+    assert.equal(serial('The History of England, Vol. 2 (of 6)'), true);
+    assert.equal(serial('The History of England, Vol 3'), true);
+    assert.equal(serial('The History of England, Vol. 12'), true);
+    assert.equal(serial('The History of England, Volume 02'), true);
+    assert.equal(serial('The History of England, Volume II'), true);
+    assert.equal(serial('The History of England, Volume IV'), true);
+    assert.equal(serial('The History of England, volume v'), true);
+    assert.equal(serial('The History of England, Volume IX.'), true);
+    assert.equal(serial('The History of England, Volume XII'), true);
+
+    // A periodical's issue
+    assert.equal(serial('Punch, or the London Charivari, May 1, 1841', ['English wit and humor -- Periodicals']), true);
+    assert.equal(serial('The Atlantic Monthly, No. 7', ['American literature -- Periodicals']), true);
+
+    // The first volume, a volume-less title, a word containing "vol", and a periodicals subject's subdivision
+    assert.equal(serial('The History of England, Vol. 1 (of 6)'), false);
+    assert.equal(serial('The History of England, Volume 1'), false);
+    assert.equal(serial('The History of England, Volume 01'), false);
+    assert.equal(serial('The History of England, Volume I'), false);
+    assert.equal(serial('The History of England, Vol. I.'), false);
+    assert.equal(serial('The History of England'), false);
+    assert.equal(serial('The Revolver 2'), false);
+    assert.equal(serial('Revolution', ['Periodicals -- History']), false);
+});
+
+
+test('rankBooks', () => {
+    // Standard Ebooks books - two leading (the first known), between two known (the lower - after, then before), and
+    // trailing (the last known) - and Gutenberg books by their own downloads
+    const se = (id) => ({'source': 'standardebooks', id});
+    const gutenberg = (id, downloads) => ({'source': 'gutenberg', id, downloads});
+    const seBooks = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].map(se);
+    const gutenbergBooks = [gutenberg('x', 700), gutenberg('y', 300), gutenberg('z', 100)];
+    const seDownloads = new Map([['b', 500], ['d', 100], ['f', 300], ['other', 1000]]);
+    const ranked = rankBooks(seBooks, gutenbergBooks, seDownloads);
+
+    // Most first - x 700; a and b 500; f, g, and y 300; c, d, e, and z 100 (ties in their order, Standard Ebooks first)
+    assert.deepEqual(ranked, [
+        {'source': 'gutenberg', 'id': 'x', 'rank': 1},
+        {'source': 'standardebooks', 'id': 'a', 'rank': 2},
+        {'source': 'standardebooks', 'id': 'b', 'rank': 3},
+        {'source': 'standardebooks', 'id': 'f', 'rank': 4},
+        {'source': 'standardebooks', 'id': 'g', 'rank': 5},
+        {'source': 'gutenberg', 'id': 'y', 'rank': 6},
+        {'source': 'standardebooks', 'id': 'c', 'rank': 7},
+        {'source': 'standardebooks', 'id': 'd', 'rank': 8},
+        {'source': 'standardebooks', 'id': 'e', 'rank': 9},
+        {'source': 'gutenberg', 'id': 'z', 'rank': 10}
+    ]);
+
+    // The books aren't changed
+    assert.deepEqual(gutenbergBooks[0], gutenberg('x', 700));
+    assert.deepEqual(seBooks[0], se('a'));
+
+    // A lone known Standard Ebooks book - the others before and after it take its downloads
+    assert.deepEqual(
+        rankBooks(['a', 'b', 'c'].map(se), [gutenberg('x', 50), gutenberg('y', 10)], new Map([['b', 20]])).map((book) => book.id),
+        ['x', 'a', 'b', 'c', 'y']
+    );
+
+    // None known - the Standard Ebooks books at 0, after the Gutenberg books with downloads
+    assert.deepEqual(
+        rankBooks([se('a'), se('b')], [gutenberg('x', 5), gutenberg('y', 0)], new Map()),
+        [
+            {'source': 'gutenberg', 'id': 'x', 'rank': 1},
+            {'source': 'standardebooks', 'id': 'a', 'rank': 2},
+            {'source': 'standardebooks', 'id': 'b', 'rank': 3},
+            {'source': 'gutenberg', 'id': 'y', 'rank': 4}
+        ]
+    );
+
+    // No books
+    assert.deepEqual(rankBooks([], [], new Map()), []);
 });
 
 

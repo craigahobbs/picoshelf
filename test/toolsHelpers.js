@@ -187,12 +187,13 @@ export function gutenbergFile(...more) {
 
 
 // A Gutenberg RDF record (rdf-files.tar.bz2's cache/epub/<id>/pg<id>.rdf) - in the real records' shape. options:
-// title, creators (names), rights, downloads, summaries, languages, type, subjects ([vocabulary, value] - "LCSH",
-// "LCC"), bookshelves, and files ([url, extent (null for none), [media types]]); a missing option is left out.
+// title, creators (names), rights, downloads, descriptions (the dcterms:description notes - "Wikipedia page about this
+// book: <url>"), summaries, languages, type, subjects ([vocabulary, value] - "LCSH", "LCC"), bookshelves, and files
+// ([url, extent (null for none), [media types]]); a missing option is left out.
 export function rdfRecord(id, options = {}) {
     const {
-        title = null, creators = [], rights = null, downloads = null, summaries = [], languages = [], type = null, subjects = [],
-        bookshelves = [], files = []
+        title = null, creators = [], rights = null, downloads = null, descriptions = [], summaries = [], languages = [], type = null,
+        subjects = [], bookshelves = [], files = []
     } = options;
     const integer = 'rdf:datatype="http://www.w3.org/2001/XMLSchema#integer"';
     const imt = 'http://purl.org/dc/terms/IMT';
@@ -226,6 +227,7 @@ export function rdfRecord(id, options = {}) {
             '    </dcterms:creator>'
         ]),
         ...(title === null ? [] : [`    <dcterms:title>${title}</dcterms:title>`]),
+        ...descriptions.map((description) => `    <dcterms:description>${description}</dcterms:description>`),
         ...summaries.map((summary) => `    <pgterms:marc520>${summary}</pgterms:marc520>`),
         ...languages.flatMap((language) => block(
             'dcterms:language', null, `<rdf:value rdf:datatype="http://purl.org/dc/terms/RFC4646">${language}</rdf:value>`

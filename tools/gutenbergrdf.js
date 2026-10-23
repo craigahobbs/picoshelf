@@ -1,7 +1,8 @@
 // Project Gutenberg's catalog - its RDF records (rdf-files.tar.bz2, updated daily: every ebook's title, authors,
 // subjects, bookshelves, files, downloads, and summary), read as Gutendex-style results (Gutendex is built from the same
 // records): {id, title, authors: [{name}], subjects, bookshelves, languages, copyright, media_type, formats (by media
-// type), summaries, download_count, text_bytes (the plain-text file's size, or null)}
+// type), summaries, download_count, text_bytes (the plain-text file's size, or null), wikipedia (the book's Wikipedia
+// page - Project Gutenberg links a notable book's - or null)}
 //
 // The archive is read with the system tar (bzip2), its records streamed - about 75,000, 2 GB of XML.
 
@@ -87,7 +88,9 @@ export function parseRecord(xml) {
         formats,
         'summaries': elementTexts(xml, /<pgterms:marc520>([^<]*)<\/pgterms:marc520>/g),
         'download_count': Number(/<pgterms:downloads[^>]*>(\d+)</.exec(xml)?.[1] ?? 0),
-        'text_bytes': textBytes
+        'text_bytes': textBytes,
+        'wikipedia': elementTexts(xml, /<dcterms:description>([^<]*)<\/dcterms:description>/g).
+            map((description) => /^Wikipedia page about this book: (\S+)/.exec(description)?.[1]).find((url) => url !== undefined) ?? null
     };
 }
 
