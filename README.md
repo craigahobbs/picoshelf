@@ -92,7 +92,9 @@ finds nearly as likely (Alice's Adventures in Wonderland is Children's and Fanta
 
 The library is the whole catalog (Library) or the books you've opened (My Library, most recent first), searched by
 title, author, and subject, and shown three ways: all its books, by author (by surname - a book with several authors
-under each), or by genre; an author or a genre opens to its books. The book playing is in the player bar at the
+under each), or by genre; an author or a genre opens to its books. A book's info button (or, in the player, its cover)
+shows its details - its description, genres, and subjects, an estimated listening time (at the narrator's default pace),
+and a link to its page at its source - with Listen and More by its author. The book playing is in the player bar at the
 bottom - close it there (×) to stop, its place kept in My Library.
 
 ## PicoVox

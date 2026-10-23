@@ -412,7 +412,7 @@ test('main, library at startup', async () => {
     assert.equal(row.querySelector('img').referrerPolicy, 'no-referrer');
     assert.equal(row.querySelector('.book-meta').textContent, 'Jane Austen');
     assert.equal(row.querySelector('.mini-progress'), null);
-    assert.equal(row.querySelector('.icon-button'), null);
+    assert.deepEqual([...row.querySelectorAll('.icon-button')].map((button) => button.title), ['About this book']);
 
     // A cover image that fails to load - a generated cover
     row.querySelector('img').dispatchEvent(new app.window.Event('error'));
@@ -638,7 +638,7 @@ test('main, my library', async () => {
     app.runTimeouts();
 
     // Remove a book - confirmed in the sheet; canceled
-    const removeButton = element('results').querySelectorAll('.book-row')[1].querySelector('.icon-button');
+    const removeButton = element('results').querySelectorAll('.book-row')[1].querySelector('button[title="Remove"]');
     assert.equal(removeButton.getAttribute('aria-label'), 'Remove Pride and Prejudice from my library');
     removeButton.click();
     assert.equal(element('sheet').open, true);
@@ -668,7 +668,7 @@ test('main, my library', async () => {
 
     // Every book removed
     for (const key of Object.keys(app.saved.books)) {
-        element('results').querySelector('.book-row .icon-button').click();
+        element('results').querySelector('.book-row button[title="Remove"]').click();
         app.click(app.sheetButtons()[1]);
         assert.equal(app.saved.books[key], undefined);
     }
@@ -1479,13 +1479,14 @@ test('main, download failure and retry', async () => {
     app.click('bookmarksButton');
     assert.equal(element('sheet').open, false);
 
-    // Tried again - in the player; the play's media element (started for the download) is released when it fails
+    // Tried again - in the player; the open book paused, then the audio unlocked on the tap (kept while the book
+    // downloads - so its play isn't outside the gesture), and its media element released when it fails
     app.click('playPause');
     assert.equal(element('playerView').hidden, false);
-    assert.deepEqual(engine.calls.slice(-2), [['ensureAudio'], ['pause']]);
+    assert.deepEqual(engine.calls.slice(-2), [['pause'], ['ensureAudio']]);
     await settle();
     assert.equal(app.text('playerStatus'), 'Error Press play to try again.');
-    assert.deepEqual(engine.calls.slice(-2), [['pause'], ['releaseMedia']]);
+    assert.deepEqual(engine.calls.slice(-2), [['ensureAudio'], ['releaseMedia']]);
 
     // A link to the failed book (from the library) - tried again; loaded (no chapters)
     app.click('toLibrary');
@@ -1933,6 +1934,384 @@ test('main, about sheet', async () => {
 });
 
 
+// The book details tests' catalog - a Standard Ebooks book, a Gutenberg book, an anonymous book (no cover), a book by
+// several authors, a book without words, description, cover, genres, or subjects, and books of listening times
+const detailsCatalog = {
+    'version': 1,
+    'sources': {'standardebooks': {'name': 'Standard Ebooks'}, 'gutenberg': {'name': 'Project Gutenberg'}},
+    'genres': {
+        'biography': 'Biography & Memoir', 'horror': 'Horror & Ghost Stories', 'poetry': 'Poetry', 'politics': 'Politics & Society',
+        'scifi': 'Science Fiction'
+    },
+    'books': [
+        {
+            'source': 'standardebooks', 'id': '/ebooks/mary-shelley/frankenstein', 'title': 'Frankenstein',
+            'subtitle': 'Or, The Modern Prometheus', 'author': 'Mary Shelley',
+            'description': 'A tragic scientist creates a monster in his laboratory.', 'subjects': ['Horror', 'Science Fiction'],
+            'cover': 'https://example.com/frankenstein.jpg', 'rank': 1, 'words': 77898, 'voice': 'robert', 'genres': ['horror', 'scifi']
+        },
+        {
+            'source': 'gutenberg', 'id': '5197', 'title': 'My Life', 'subtitle': 'Volume 1', 'author': 'Richard Wagner',
+            'description': 'An autobiography written between 1865 and 1880.', 'subjects': ['Biographies', 'Music', 'Composers'],
+            'cover': 'https://example.com/my-life.jpg', 'rank': 2, 'words': 219367, 'genres': ['biography']
+        },
+        {
+            'source': 'gutenberg', 'id': '16328', 'title': 'Beowulf', 'author': '', 'description': 'An Old English epic.',
+            'cover': null, 'rank': 3, 'words': 980, 'genres': ['poetry']
+        },
+        {
+            'source': 'gutenberg', 'id': '61', 'title': 'The Communist Manifesto', 'author': 'Karl Marx, Friedrich Engels',
+            'cover': null, 'rank': 4, 'words': 14, 'genres': ['politics', 'pamphlets']
+        },
+        {'source': 'standardebooks', 'id': '/ebooks/some-writer/bare', 'title': 'Bare', 'author': 'Some Writer', 'cover': null, 'rank': 5},
+        ...[5600, 5530, 1330, 8120, 8400, 12600, 16800, 24500, 1215698].map((words, ix) => ({
+            'source': 'gutenberg', 'id': String(2000 + ix), 'title': `Time ${words}`, 'author': 'Anonymous', 'cover': null,
+            'rank': 10 + ix, words
+        }))
+    ]
+};
+
+
+// A book row's details button (by its title), and the details sheet's contents
+function detailsButton(app, title) {
+    const row = [...app.element('results').querySelectorAll('.book-row')].
+        find((item) => item.querySelector('.book-title').textContent === title);
+    return row.querySelector('button[title="About this book"]');
+}
+
+function sheetDetails(app) {
+    const body = app.element('sheetBody');
+    const text = (selector) => body.querySelector(selector)?.textContent ?? null;
+    const link = body.querySelector('.details-section a');
+    return {
+        'sheetTitle': app.text('sheetTitle'),
+        'cover': body.querySelector('.details-head .cover img')?.src ?? `generated: ${text('.details-head .cover .generated')}`,
+        'title': text('.details-title'),
+        'subtitle': text('.details-subtitle'),
+        'author': text('.details-author'),
+        'length': text('.details-length'),
+        'actions': app.sheetButtons().map((button) => button.textContent),
+        'description': text('.details-description'),
+        'sections': [...body.querySelectorAll('.details-section h3')].map((heading) => heading.textContent),
+        'genres': [...body.querySelectorAll('.details-genres li')].map((genre) => genre.textContent),
+        'subjects': [...body.querySelectorAll('.details-section')].
+            find((section) => section.querySelector('h3').textContent === 'Subjects')?.querySelector('p').textContent ?? null,
+        'link': [link.textContent, link.href, link.target, link.rel]
+    };
+}
+
+
+test('main, book details sheet', async () => {
+    const app = startApp({'catalog': detailsCatalog});
+    const {element} = app;
+    await settle();
+    const details = (title) => {
+        app.click(detailsButton(app, title));
+        assert.equal(element('sheet').open, true);
+        const result = sheetDetails(app);
+        app.click('sheetClose');
+        return result;
+    };
+
+    // The info button - an icon button, after the row's open button
+    const info = detailsButton(app, 'Frankenstein');
+    assert.equal(info.className, 'icon-button');
+    assert.equal(info.type, 'button');
+    assert.equal(info.getAttribute('aria-label'), 'About Frankenstein');
+    assert.equal(info.querySelector('use').getAttribute('href'), '#i-info');
+    assert.equal(info.previousElementSibling.className, 'book-open');
+
+    // A Standard Ebooks book
+    assert.deepEqual(details('Frankenstein'), {
+        'sheetTitle': 'About this book',
+        'cover': 'https://example.com/frankenstein.jpg',
+        'title': 'Frankenstein',
+        'subtitle': 'Or, The Modern Prometheus',
+        'author': 'Mary Shelley',
+        'length': 'About 9 hours',
+        'actions': ['Listen', 'More by Mary Shelley'],
+        'description': 'A tragic scientist creates a monster in his laboratory.',
+        'sections': ['Genres', 'Subjects', 'Source'],
+        'genres': ['Horror & Ghost Stories', 'Science Fiction'],
+        'subjects': 'Horror · Science Fiction',
+        'link': ['Standard Ebooks', 'https://standardebooks.org/ebooks/mary-shelley/frankenstein', '_blank', 'noopener']
+    });
+
+    // A Project Gutenberg book
+    assert.deepEqual(details('My Life'), {
+        'sheetTitle': 'About this book',
+        'cover': 'https://example.com/my-life.jpg',
+        'title': 'My Life',
+        'subtitle': 'Volume 1',
+        'author': 'Richard Wagner',
+        'length': 'About 26 hours',
+        'actions': ['Listen', 'More by Richard Wagner'],
+        'description': 'An autobiography written between 1865 and 1880.',
+        'sections': ['Genre', 'Subjects', 'Source'],
+        'genres': ['Biography & Memoir'],
+        'subjects': 'Biographies · Music · Composers',
+        'link': ['Project Gutenberg', 'https://www.gutenberg.org/ebooks/5197', '_blank', 'noopener']
+    });
+
+    // An anonymous book - no More by; its generated cover
+    assert.deepEqual(details('Beowulf'), {
+        'sheetTitle': 'About this book',
+        'cover': 'generated: Beowulf',
+        'title': 'Beowulf',
+        'subtitle': null,
+        'author': 'Anonymous',
+        'length': 'About 7 minutes',
+        'actions': ['Listen'],
+        'description': 'An Old English epic.',
+        'sections': ['Genre', 'Source'],
+        'genres': ['Poetry'],
+        'subjects': null,
+        'link': ['Project Gutenberg', 'https://www.gutenberg.org/ebooks/16328', '_blank', 'noopener']
+    });
+
+    // Several authors - More by the first; a genre the catalog doesn't name is its key
+    assert.deepEqual(details('The Communist Manifesto'), {
+        'sheetTitle': 'About this book',
+        'cover': 'generated: The Communist Manifesto',
+        'title': 'The Communist Manifesto',
+        'subtitle': null,
+        'author': 'Karl Marx, Friedrich Engels',
+        'length': 'About 1 minute',
+        'actions': ['Listen', 'More by Karl Marx'],
+        'description': null,
+        'sections': ['Genres', 'Source'],
+        'genres': ['Politics & Society', 'pamphlets'],
+        'subjects': null,
+        'link': ['Project Gutenberg', 'https://www.gutenberg.org/ebooks/61', '_blank', 'noopener']
+    });
+
+    // A book without words, a description, a cover, genres, or subjects
+    assert.deepEqual(details('Bare'), {
+        'sheetTitle': 'About this book',
+        'cover': 'generated: Bare',
+        'title': 'Bare',
+        'subtitle': null,
+        'author': 'Some Writer',
+        'length': null,
+        'actions': ['Listen', 'More by Some Writer'],
+        'description': null,
+        'sections': ['Source'],
+        'genres': [],
+        'subjects': null,
+        'link': ['Standard Ebooks', 'https://standardebooks.org/ebooks/some-writer/bare', '_blank', 'noopener']
+    });
+
+    // The listening times - at 14 characters a second, 6 a word (140 words a minute): to the minute under 10 minutes, to
+    // 5 minutes under an hour, to the half hour under 3 hours, else to the hour; an "Anonymous" author has no More by
+    assert.deepEqual([5600, 5530, 1330, 8120, 8400, 12600, 16800, 24500, 1215698].map((words) => {
+        const {length, actions} = details(`Time ${words}`);
+        return [words, length, actions];
+    }), [
+        [5600, 'About 40 minutes', ['Listen']],
+        [5530, 'About 40 minutes', ['Listen']],
+        [1330, 'About 10 minutes', ['Listen']],
+        [8120, 'About 1 hour', ['Listen']],
+        [8400, 'About 1 hour', ['Listen']],
+        [12600, 'About 1½ hours', ['Listen']],
+        [16800, 'About 2 hours', ['Listen']],
+        [24500, 'About 3 hours', ['Listen']],
+        [1215698, 'About 145 hours', ['Listen']]
+    ]);
+    app.close();
+});
+
+
+test('main, book details sheet actions', async () => {
+    const app = startApp({'catalog': detailsCatalog});
+    const {element, window} = app;
+    await settle();
+
+    // Listen - the book in the player (not playing), the sheet closed
+    app.click(detailsButton(app, 'My Life'));
+    const [listen] = app.sheetButtons();
+    assert.equal(listen.className, 'button primary');
+    assert.equal(listen.querySelector('use').getAttribute('href'), '#i-play');
+    app.click(listen);
+    assert.equal(element('sheet').open, false);
+    assert.equal(element('playerView').hidden, false);
+    assert.equal(app.saved.current, 'gutenberg:5197');
+    await settle();
+    assert.equal(app.text('bookTitle'), 'My Life');
+    assert.equal(app.engine.calls.some(([name]) => name === 'play'), false);
+
+    // Back to the library - More by the first of several authors: the library's author group, open
+    app.click('toLibrary');
+    await settle();
+    app.click(detailsButton(app, 'The Communist Manifesto'));
+    app.click(app.sheetButtons()[1]);
+    assert.equal(element('sheet').open, false);
+    assert.equal(app.saved.scope, 'library');
+    assert.equal(app.saved.libraryView, 'authors');
+    assert.equal(window.location.hash, '#author=Karl%20Marx');
+    const openGroups = [...element('results').querySelectorAll('details.group')].filter((group) => group.open);
+    assert.deepEqual(openGroups.map((group) => group.dataset.group), ['authors:Karl Marx']);
+    app.close();
+});
+
+
+test('main, book details sheet in my library and on the Wikipedia shelf', async () => {
+    const saved = {
+        'scope': 'mine',
+        'books': {
+            'standardebooks:/ebooks/mary-shelley/frankenstein': {
+                'source': 'standardebooks', 'id': '/ebooks/mary-shelley/frankenstein', 'title': 'Frankenstein',
+                'author': 'Mary Shelley', 'cover': 'https://example.com/frankenstein.jpg', 'char': 0, 'percent': 10, 'updated': 2
+            },
+            'wikipedia:Moby-Dick': {
+                'source': 'wikipedia', 'id': 'Moby-Dick', 'title': 'Moby-Dick', 'author': 'Wikipedia', 'cover': null, 'char': 0,
+                'percent': 0, 'updated': 1
+            }
+        }
+    };
+    const catalogLoad = deferred();
+    const app = startApp({
+        saved, 'catalogResponse': catalogLoad.promise,
+        'todaysArticles': () => Promise.resolve([
+            articleBook({'title': 'Grand Hôtel (film)', 'description': '1932 film', 'cover': 'https://example.com/hotel.jpg'}),
+            articleBook({'title': 'AC/DC?'})
+        ])
+    });
+    const {element} = app;
+    await settle();
+
+    // My library's rows - the info and remove buttons
+    const row = element('results').querySelector('.book-row');
+    assert.deepEqual([...row.querySelectorAll('.icon-button')].map((button) => button.getAttribute('aria-label')), [
+        'About Frankenstein', 'Remove Frankenstein from my library'
+    ]);
+
+    // Before the catalog loads - the book's saved details
+    app.click(detailsButton(app, 'Frankenstein'));
+    let details = sheetDetails(app);
+    assert.deepEqual([details.title, details.author, details.length, details.description, details.sections], [
+        'Frankenstein', 'Mary Shelley', null, null, ['Source']
+    ]);
+    assert.deepEqual(details.actions, ['Listen', 'More by Mary Shelley']);
+    app.click('sheetClose');
+    app.click(detailsButton(app, 'Moby-Dick'));
+    details = sheetDetails(app);
+    assert.deepEqual([details.author, details.actions, details.sections, details.genres, details.link], [
+        'From Wikipedia, the free encyclopedia (CC BY-SA)', ['Listen'], ['Genre', 'Source'], ['Wikipedia'],
+        ['Wikipedia', 'https://en.wikipedia.org/wiki/Moby-Dick', '_blank', 'noopener']
+    ]);
+    app.click('sheetClose');
+
+    // The catalog loaded - my library's book with its catalog details
+    catalogLoad.resolve({'ok': true, 'status': 200, 'json': () => Promise.resolve(structuredClone(detailsCatalog))});
+    await settle();
+    app.click(detailsButton(app, 'Frankenstein'));
+    details = sheetDetails(app);
+    assert.deepEqual([details.subtitle, details.length, details.description, details.genres], [
+        'Or, The Modern Prometheus', 'About 9 hours', 'A tragic scientist creates a monster in his laboratory.',
+        ['Horror & Ghost Stories', 'Science Fiction']
+    ]);
+    app.click('sheetClose');
+
+    // The Wikipedia shelf - an article's details: its description, Wikipedia's genre, and its page (its title encoded)
+    app.click(app.tab('scopeTabs', 'Wikipedia'));
+    await settle();
+    const wikipediaRow = element('results').querySelector('.book-row');
+    assert.deepEqual([...wikipediaRow.querySelectorAll('.icon-button')].map((button) => button.getAttribute('aria-label')), [
+        'About Grand Hôtel (film)'
+    ]);
+    app.click(detailsButton(app, 'Grand Hôtel (film)'));
+    assert.deepEqual(sheetDetails(app), {
+        'sheetTitle': 'About this book',
+        'cover': 'https://example.com/hotel.jpg',
+        'title': 'Grand Hôtel (film)',
+        'subtitle': null,
+        'author': 'From Wikipedia, the free encyclopedia (CC BY-SA)',
+        'length': null,
+        'actions': ['Listen'],
+        'description': '1932 film',
+        'sections': ['Genre', 'Source'],
+        'genres': ['Wikipedia'],
+        'subjects': null,
+        'link': ['Wikipedia', 'https://en.wikipedia.org/wiki/Grand_H%C3%B4tel_(film)', '_blank', 'noopener']
+    });
+    app.click('sheetClose');
+    app.click(detailsButton(app, 'AC/DC?'));
+    assert.equal(sheetDetails(app).link[1], 'https://en.wikipedia.org/wiki/AC%2FDC%3F');
+
+    // Listen - the article in the player; its cover's details keep its description
+    app.click(app.sheetButtons()[0]);
+    assert.equal(app.saved.current, 'wikipedia:AC/DC?');
+    app.click('toLibrary');
+    await settle();
+    app.click(detailsButton(app, 'Grand Hôtel (film)'));
+    app.click(app.sheetButtons()[0]);
+    await settle();
+    assert.equal(app.text('bookTitle'), 'Grand Hôtel (film)');
+    app.click('playerCover');
+    details = sheetDetails(app);
+    assert.deepEqual([details.title, details.description, details.genres, details.cover], [
+        'Grand Hôtel (film)', '1932 film', ['Wikipedia'], 'https://example.com/hotel.jpg'
+    ]);
+    app.close();
+});
+
+
+test('main, book details sheet from the player\'s cover', async () => {
+    // No book open - nothing
+    const app0 = startApp();
+    await settle();
+    app0.click('playerCover');
+    assert.equal(app0.element('sheet').open, false);
+    app0.close();
+
+    const app = await startPlayer();
+    const {document, element, engine} = app;
+
+    // The cover - a button, keyboard focusable
+    const cover = element('playerCover');
+    assert.equal(cover.tagName, 'BUTTON');
+    assert.equal(cover.type, 'button');
+    assert.equal(cover.getAttribute('aria-label'), 'About this book');
+    assert.equal(cover.tabIndex, 0);
+    cover.focus();
+    assert.equal(document.activeElement, cover);
+    assert.equal(cover.querySelector('img').src, 'https://example.com/pride.jpg');
+
+    // Space on the focused cover is the button's (it opens the details), not play
+    const count = engine.calls.length;
+    const space = app.key(' ', cover);
+    assert.equal(space.defaultPrevented, false);
+    assert.equal(engine.calls.length, count);
+
+    // The open book's details - with its catalog details
+    app.click(cover);
+    assert.equal(element('sheet').open, true);
+    const details = sheetDetails(app);
+    assert.deepEqual([details.sheetTitle, details.title, details.author, details.genres, details.subjects, details.actions], [
+        'About this book', 'Pride and Prejudice', 'Jane Austen', ['Romance', 'General Fiction'], 'Fiction',
+        ['Listen', 'More by Jane Austen']
+    ]);
+
+    // The sheet's buttons are keyboard focusable; Listen - the open book, still in the player
+    const [listen] = app.sheetButtons();
+    listen.focus();
+    assert.equal(document.activeElement, listen);
+    app.click(listen);
+    assert.equal(element('sheet').open, false);
+    assert.equal(element('playerView').hidden, false);
+    assert.equal(engine.calls.filter(([name]) => name === 'load').length, 1);
+
+    // More by - the library's author group
+    app.click(cover);
+    app.click(app.sheetButtons()[1]);
+    assert.equal(element('sheet').open, false);
+    assert.equal(element('playerView').hidden, true);
+    assert.equal(element('libraryView').hidden, false);
+    assert.equal(app.window.location.hash, '#author=Jane%20Austen');
+    app.close();
+});
+
+
 test('main, settings sheet', async () => {
     const app = await startPlayer();
     const {element, engine} = app;
@@ -2076,7 +2455,7 @@ test('main, remove the open book', async () => {
     await settle();
 
     // Removed from my library - closed
-    element('results').querySelector('.book-row .icon-button').click();
+    element('results').querySelector('.book-row button[title="Remove"]').click();
     app.click(app.sheetButtons()[1]);
     assert.deepEqual(engine.calls.at(-1), ['unload']);
     assert.equal(app.saved.current, null);
@@ -2087,7 +2466,7 @@ test('main, remove the open book', async () => {
     // Removed with the player shown (a link opened it behind the sheet) - the library
     const app2 = startApp({'saved': savedWithBook('library', {'scope': 'mine'}), 'cached': cachedPride});
     await settle();
-    app2.element('results').querySelector('.book-row .icon-button').click();
+    app2.element('results').querySelector('.book-row button[title="Remove"]').click();
     app2.window.location.hash = '#book=se.jane-austen.pride-and-prejudice';
     await settle();
     assert.equal(app2.element('playerView').hidden, false);
