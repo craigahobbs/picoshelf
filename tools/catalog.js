@@ -312,6 +312,17 @@ export function titleKey(title) {
 }
 
 
+// Is a Gutenberg book's title (with its subtitle) a Standard Ebooks title's work - the same title key, or its words beginning
+// with the Standard Ebooks title's ("The Adventures of Tom Sawyer, Complete", "The Odyssey of Homer", "Walden, and On
+// the Duty of Civil Disobedience"; not "Dracula's Guest" - a word, not a prefix)
+export function isSameWork(workTitle, seTitle) {
+    const words = (title) => normalizeText(title).replace(/^(?:the|a|an) /, '');
+    const workWords = words(workTitle);
+    const seWords = words(seTitle);
+    return titleKey(workTitle) === titleKey(seTitle) || workWords.startsWith(`${seWords} `);
+}
+
+
 // The surname keys of a display author list ('Mary Shelley, Percy Bysshe Shelley') - each name's last word, first
 // four letters, so spelling variants of transliterated names match (Dostoevsky, Dostoyevsky); anonymous is ''
 export function surnameKeys(author) {
@@ -581,8 +592,13 @@ export function isReferenceWork(result) {
 // duplicates, or less popular editions of a book - each a catalog book (without its rank, words, and text) with its
 // downloads
 export function gutenbergCandidates(records, seBooks, repositories, options) {
-    // Standard Ebooks' works, by title and author surname
-    const seWorks = new Set(seBooks.flatMap((book) => surnameKeys(book.author).map((surname) => `${titleKey(book.title)}|${surname}`)));
+    // Standard Ebooks' titles, by author surname
+    const seTitles = new Map();
+    for (const book of seBooks) {
+        for (const surname of surnameKeys(book.author)) {
+            seTitles.set(surname, [...(seTitles.get(surname) ?? []), book.title]);
+        }
+    }
     const candidates = [];
     const fullTitles = new Set();
     let notInGitenberg = 0;
@@ -603,7 +619,8 @@ export function gutenbergCandidates(records, seBooks, repositories, options) {
         }
         const {title, subtitle} = gutenbergTitle(record.title);
         const author = record.authors.map((person) => gutenbergAuthor(person.name)).filter((name) => name !== '').join(', ');
-        if (surnameKeys(author).some((surname) => seWorks.has(`${titleKey(title)}|${surname}`))) {
+        const workTitle = subtitle === '' ? title : `${title} ${subtitle}`;
+        if (surnameKeys(author).some((surname) => (seTitles.get(surname) ?? []).some((seTitle) => isSameWork(workTitle, seTitle)))) {
             seDuplicates++;
             continue;
         }

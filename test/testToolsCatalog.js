@@ -11,7 +11,8 @@ import process from 'node:process';
 // The tools - imported after toolsHelpers.js sets their cache directory
 const {
     catalogJSON, collapseSpace, fetchCached, fetchFile, fetchRetry, genreQuotas, gitenbergRepositories, gutenbergAuthor,
-    gutenbergDescription, gutenbergSubjects, gutenbergText, gutenbergTitle, isReferenceWork, log, parseArgs, services, surnameKeys,
+    gutenbergDescription, gutenbergSubjects, gutenbergText, gutenbergTitle, isReferenceWork, isSameWork, log, parseArgs, services,
+    surnameKeys,
     titleCase, titleKey, trimDescription, uniqueSubjects
 } = await import('../tools/catalog.js');
 const {qualityVersion} = await import('../tools/quality.js');
@@ -117,6 +118,20 @@ test('uniqueSubjects', () => {
 test('titleKey', () => {
     assert.equal(titleKey('The Case-Book of Sherlock Holmes'), titleKey('The Casebook of Sherlock Holmes'));
     assert.equal(titleKey('An Essay'), 'essay');
+});
+
+
+test('isSameWork', () => {
+    // The same title, or a Gutenberg title beginning with the Standard Ebooks title's words
+    assert.equal(isSameWork('The Casebook of Sherlock Holmes', 'The Case-Book of Sherlock Holmes'), true);
+    assert.equal(isSameWork('The Adventures of Tom Sawyer, Complete', 'The Adventures of Tom Sawyer'), true);
+    assert.equal(isSameWork('Whose Body? A Lord Peter Wimsey Novel', 'Whose Body?'), true);
+    assert.equal(isSameWork('The Odyssey of Homer', 'The Odyssey'), true);
+
+    // A longer word, or another title
+    assert.equal(isSameWork('Dracula\'s Guest', 'Dracula'), false);
+    assert.equal(isSameWork('Emmanuel', 'Emma'), false);
+    assert.equal(isSameWork('Persuasion', 'Emma'), false);
 });
 
 

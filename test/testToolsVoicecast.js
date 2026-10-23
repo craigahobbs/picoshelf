@@ -185,6 +185,18 @@ test('castBooks, split', async () => {
 });
 
 
+test('voicecast.js --eval, hand-cast books not in the catalog', async () => {
+    // The catalog without the last two hand-cast books - the others scored, the two named
+    const partialCatalogPath = join(tempDir, 'partialCatalog.json');
+    writeFileSync(partialCatalogPath, JSON.stringify({'books': labelsCatalogBooks.slice(0, -2)}));
+    const result = await runVoicecast(['--eval', '--model', 'test:model'], partialCatalogPath);
+    assert.equal(result.code, 0);
+    const lines = result.stdout.trimEnd().split('\n');
+    assert.match(lines[0], new RegExp(`\\(${labels.length - 2} books\\)$`));
+    assert.equal(lines.at(-1), `2 hand-cast books not in the catalog: ${labels.slice(-2).map((label) => label.title).join('; ')}`);
+});
+
+
 test('voicecast.js --eval', async () => {
     const result = await runVoicecast(['--eval', '--model', 'test:model'], labelsCatalogPath);
     assert.equal(result.code, 0);

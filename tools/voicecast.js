@@ -127,8 +127,10 @@ export async function castBooks(books, {model, scheme = castScheme, log}) {
 // right sex
 async function evaluate(model, scheme) {
     await checkModel(model);
-    const labels = JSON.parse(readFileSync(join(root, 'tools', 'voicelabels.json'), 'utf-8'));
+    // The hand-cast books in the catalog (a book the catalog has left out has no details to cast it by)
     const books = new Map(catalogBooks().map((book) => [`${book.source}|${book.id}`, book]));
+    const allLabels = JSON.parse(readFileSync(join(root, 'tools', 'voicelabels.json'), 'utf-8'));
+    const labels = allLabels.filter((label) => books.has(`${label.source}|${label.id}`));
     const female = new Set(Object.values(splitVoices.female));
 
     // Warm the model, then cast each book
@@ -153,6 +155,10 @@ async function evaluate(model, scheme) {
         `${milliseconds.toFixed(0)} ms a book (${labels.length} books)\n`);
     for (const miss of misses) {
         process.stdout.write(`    ${miss}\n`);
+    }
+    const missing = allLabels.filter((label) => !books.has(`${label.source}|${label.id}`));
+    if (missing.length > 0) {
+        process.stdout.write(`${missing.length} hand-cast books not in the catalog: ${missing.map((label) => label.title).join('; ')}\n`);
     }
 }
 
