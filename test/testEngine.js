@@ -1,5 +1,6 @@
 import {Engine} from '../lib/engine.js';
 import {strict as assert} from 'node:assert';
+import {defaultSampleRate} from 'picovox/lib/synthesis.js';
 import test from 'node:test';
 
 
@@ -1043,11 +1044,11 @@ test('Engine, audio', async (testContext) => {
     engine.load(threeSentences);
     sendUnit(workers[0], 1, 0, [1]);
 
-    // The audio is created on the first play - Web Audio plays directly, and a silent looping media element keeps the
-    // audio session
+    // The audio is created on the first play, at PicoVox's sample rate - Web Audio plays directly, and a silent looping
+    // media element keeps the audio session
     engine.play();
     const context = engine.audioContext;
-    assert.deepEqual(context.options, {'latencyHint': 'playback'});
+    assert.deepEqual(context.options, {'latencyHint': 'playback', 'sampleRate': defaultSampleRate});
     assert.equal(context.resumes, 1);
     assert.equal(engine.output.name, 'gain');
     assert.deepEqual(engine.output.connections, [context.destination]);
