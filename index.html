@@ -87,6 +87,10 @@
         margin: 0 auto;
         padding: calc(env(safe-area-inset-top) + 16px) calc(env(safe-area-inset-right) + 16px) calc(env(safe-area-inset-bottom) + 96px) calc(env(safe-area-inset-left) + 16px);
     }
+    /* (the library's end clear of the mini player and the back-to-top button above it) */
+    #libraryView {
+        padding-bottom: calc(env(safe-area-inset-bottom) + 144px);
+    }
     h1, h2 {
         margin: 0;
         line-height: 1.2;
@@ -293,6 +297,43 @@
         text-decoration: underline;
         text-underline-offset: 3px;
     }
+    /* A linked group shown alone - its header (All authors or genres, its name and book count), and its books */
+    .focus-head {
+        padding: 2px 0 6px;
+        border-bottom: 1px solid var(--border);
+    }
+    .focus-all {
+        min-height: 40px;
+        margin-left: -4px;
+        padding: 0 4px;
+        border: 0;
+        background: none;
+        font-size: 0.9rem;
+        color: var(--muted);
+        text-decoration: underline;
+        text-underline-offset: 3px;
+    }
+    .focus-all:hover, .focus-all:focus-visible {
+        color: var(--text);
+    }
+    .focus-name {
+        margin: 2px 0 0;
+        font: 700 1.35rem/1.25 Georgia, "Iowan Old Style", serif;
+        overflow-wrap: anywhere;
+    }
+    .focus-count {
+        margin: 2px 0 0;
+        font-size: 0.875rem;
+    }
+    .group.focused {
+        border-bottom: 0;
+    }
+    .group.focused > summary {
+        display: none;
+    }
+    .group.focused > .book-list {
+        padding: 8px 0 8px;
+    }
     .group-more {
         display: block;
         width: 100%;
@@ -397,13 +438,47 @@
         margin-top: 10px;
     }
 
-    /* The mini player */
-    .mini-player {
+    /* The bottom dock - the back-to-top button above the mini player, fixed at the bottom (the dock lets taps through) */
+    .bottom-dock {
         position: fixed;
         left: 0;
         right: 0;
         bottom: 0;
         z-index: 5;
+        display: flex;
+        flex-direction: column;
+        pointer-events: none;
+    }
+    .bottom-dock > * {
+        pointer-events: auto;
+    }
+    .to-top {
+        align-self: flex-end;
+        width: 44px;
+        height: 44px;
+        margin: 0 calc(env(safe-area-inset-right) + 16px) calc(env(safe-area-inset-bottom) + 16px) 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--border);
+        border-radius: 50%;
+        background: var(--surface);
+        color: var(--muted);
+        box-shadow: var(--shadow);
+    }
+    .to-top:hover, .to-top:focus-visible {
+        color: var(--text);
+    }
+    .to-top .icon {
+        width: 22px;
+        height: 22px;
+    }
+    .to-top.above-mini-player {
+        margin-bottom: 10px;
+    }
+
+    /* The mini player */
+    .mini-player {
         padding: 8px calc(env(safe-area-inset-right) + 12px) calc(env(safe-area-inset-bottom) + 8px) calc(env(safe-area-inset-left) + 12px);
         background: var(--surface);
         border-top: 1px solid var(--border);
@@ -937,6 +1012,7 @@
     <symbol id="i-close" viewBox="0 0 24 24"><path d="M6.4 5 5 6.4l5.6 5.6L5 17.6 6.4 19l5.6-5.6 5.6 5.6 1.4-1.4-5.6-5.6L19 6.4 17.6 5 12 10.6z"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 17.2V20h2.8l9.4-9.4-2.8-2.8zm15.7-9.5a1 1 0 0 0 0-1.4l-2-2a1 1 0 0 0-1.4 0l-1.6 1.6 2.8 2.8z"/></symbol>
     <symbol id="i-info" viewBox="0 0 24 24"><path fill-rule="evenodd" d="M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zm0 1.8a7.2 7.2 0 1 0 0 14.4 7.2 7.2 0 0 0 0-14.4z"/><circle cx="12" cy="8.1" r="1.2"/><rect x="11.1" y="10.4" width="1.8" height="6.4" rx="0.9"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M11 20V7.8l-5.6 5.6L4 12l8-8 8 8-1.4 1.4L13 7.8V20z"/></symbol>
     <symbol id="i-delete" viewBox="0 0 24 24"><path d="M9 3h6l1 2h4v2H4V5h4zm-3 6h12l-1 12H7zm4 2v8h1.5v-8zm3.5 0v8H15v-8z"/></symbol>
 </svg>
 
@@ -964,8 +1040,11 @@
     </section>
 </main>
 
-<div id="miniPlayer" class="mini-player" hidden>
-    <div class="mini-player-inner" id="miniPlayerInner"></div>
+<div class="bottom-dock">
+    <button id="toTop" class="to-top" type="button" aria-label="Back to top" title="Back to top" hidden><svg class="icon"><use href="#i-up"/></svg></button>
+    <div id="miniPlayer" class="mini-player" hidden>
+        <div class="mini-player-inner" id="miniPlayerInner"></div>
+    </div>
 </div>
 
 <main id="playerView" class="view player" hidden>
