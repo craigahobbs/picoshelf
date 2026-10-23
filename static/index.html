@@ -3,8 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#f7f3ec" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#16130f" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#16130f">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>PicoShelf</title>
@@ -16,34 +15,18 @@
 <link rel="manifest" href="manifest.webmanifest">
 <style>
     :root {
-        --bg: #f7f3ec;
-        --surface: #fffdf9;
-        --surface-2: #efe9df;
-        --text: #221d16;
-        --muted: #6f665a;
-        --border: #e2d9cb;
-        --accent: #8a3b12;
-        --accent-text: #ffffff;
-        --track: #e2d9cb;
-        --error: #b3261e;
-        --shadow: 0 1px 2px rgba(60, 40, 20, 0.08), 0 4px 16px rgba(60, 40, 20, 0.08);
-        color-scheme: light;
-    }
-    @media (prefers-color-scheme: dark) {
-        :root {
-            --bg: #16130f;
-            --surface: #211c17;
-            --surface-2: #2b251e;
-            --text: #f1ebe2;
-            --muted: #a99f92;
-            --border: #3a3229;
-            --accent: #e49a62;
-            --accent-text: #1c120a;
-            --track: #3a3229;
-            --error: #ff8a80;
-            --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.3);
-            color-scheme: dark;
-        }
+        --bg: #16130f;
+        --surface: #211c17;
+        --surface-2: #2b251e;
+        --text: #f1ebe2;
+        --muted: #a99f92;
+        --border: #3a3229;
+        --accent: #e49a62;
+        --accent-text: #1c120a;
+        --track: #3a3229;
+        --error: #ff8a80;
+        --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.3);
+        color-scheme: dark;
     }
     * {
         box-sizing: border-box;
@@ -482,7 +465,7 @@
         padding: 8px calc(env(safe-area-inset-right) + 12px) calc(env(safe-area-inset-bottom) + 8px) calc(env(safe-area-inset-left) + 12px);
         background: var(--surface);
         border-top: 1px solid var(--border);
-        box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.08);
+        box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
     }
     .mini-player-inner {
         max-width: 760px;
