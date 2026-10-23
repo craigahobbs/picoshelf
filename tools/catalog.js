@@ -665,11 +665,13 @@ export function isNotable(record) {
 }
 
 
-// Is a Gutenberg record a part of a serial - a periodical's issue, or a work's volume after its first ("Vol. 2 (of 3)",
-// "Volume II", "Volume 02")?
-const laterVolumeRegex = /\bvol(?:ume)?\.?\s*(?:0*[2-9]|0*[1-9]\d+|I[IVX]+|V|VI{1,3}|IX|X[IVX]*)\b/i;
+// Is a Gutenberg record a part of a serial - a periodical's issue, or a work's volume or book after its first ("Vol. 2
+// (of 3)", "Volume II", "Volume 02", "v. 3/4", "Book V")?
+const laterVolumeRegex = /\b(?:vol(?:ume)?\.?\s*|book\s+)(?:0*[2-9]|0*[1-9]\d+|I[IVX]+|V|VI{1,3}|IX|X[IVX]*)\b/i;
+const laterVRegex = /\bv\.\s*0*(?:[2-9]|[1-9]\d+)\b/i;
 export function isSerial(record) {
-    return record.subjects.some((subject) => /\bPeriodicals$/.test(subject)) || laterVolumeRegex.test(record.title);
+    return record.subjects.some((subject) => /\bPeriodicals$/.test(subject)) ||
+        laterVolumeRegex.test(record.title) || laterVRegex.test(record.title);
 }
 
 

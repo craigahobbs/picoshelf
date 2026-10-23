@@ -271,6 +271,10 @@ test('isSerial', () => {
     assert.equal(serial('The History of England, volume v'), true);
     assert.equal(serial('The History of England, Volume IX.'), true);
     assert.equal(serial('The History of England, Volume XII'), true);
+    assert.equal(serial('The Mysteries of London, v. 3/4'), true);
+    assert.equal(serial('Constantinople, V. 2 (of 2)'), true);
+    assert.equal(serial('The History of Rome, Book V'), true);
+    assert.equal(serial('Gargantua and Pantagruel, Illustrated, Book 3'), true);
 
     // A periodical's issue
     assert.equal(serial('Punch, or the London Charivari, May 1, 1841', ['English wit and humor -- Periodicals']), true);
@@ -283,6 +287,11 @@ test('isSerial', () => {
     assert.equal(serial('The History of England, Volume I'), false);
     assert.equal(serial('The History of England, Vol. I.'), false);
     assert.equal(serial('The History of England'), false);
+    assert.equal(serial('The Mysteries of London, v. 1/4'), false);
+    assert.equal(serial('Gargantua and Pantagruel, Illustrated, Book 1'), false);
+    assert.equal(serial('The Jungle Book'), false);
+    assert.equal(serial('V. V.\'s Eyes'), false);
+    assert.equal(serial('The Second Jungle Book'), false);
     assert.equal(serial('The Revolver 2'), false);
     assert.equal(serial('Revolution', ['Periodicals -- History']), false);
 });
