@@ -12,7 +12,7 @@
 //   --popular <count>         the top Gutenberg candidates (by downloads) chosen first, whatever their genres (default
 //                             1000)
 //   --gutenberg <count>       the number of top Gutenberg books (by downloads) whose genres are decided - the candidates
-//                             (default 8000)
+//                             (default 16000 - deep enough for the smaller genres' notable books)
 //   --standardebooks <count>  only the most popular Standard Ebooks books (default all)
 //   --max-age <days>          refetch Gutenberg's catalog and the Standard Ebooks listing pages older than this
 //                             (default 30)
@@ -85,7 +85,7 @@ const subjectCount = 8;
 // Parse the command line
 export function parseArgs(args) {
     const options = {
-        'books': 5000, 'popular': 1000, 'gutenberg': 8000, 'standardebooks': Infinity, 'maxAge': 30, 'pageMaxAge': 365,
+        'books': 5000, 'popular': 1000, 'gutenberg': 16000, 'standardebooks': Infinity, 'maxAge': 30, 'pageMaxAge': 365,
         'cacheOnly': false,
         'output': join(root, 'data', 'catalog.json'), 'voiceModel': decisionModel
     };

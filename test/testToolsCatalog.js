@@ -26,7 +26,7 @@ test('parseArgs, defaults', () => {
     const options = parseArgs([]);
     assert.equal(options.books, 5000);
     assert.equal(options.popular, 1000);
-    assert.equal(options.gutenberg, 8000);
+    assert.equal(options.gutenberg, 16000);
     assert.equal(options.standardebooks, Infinity);
     assert.equal(options.maxAge, 30);
     assert.equal(options.pageMaxAge, 365);

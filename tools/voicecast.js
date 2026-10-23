@@ -42,7 +42,7 @@ export const castVoices = {
     'grace': 'A woman narrates in a gentle, soft, slow voice - for poetry by women, devotional and spiritual writing, and ' +
         'quiet bedtime reading.',
     'james': 'A man narrates in a warm, relaxed storyteller\'s voice - for novels and stories by men: literary fiction, ' +
-        'westerns, comedy, and historical and adventure novels for adults.',
+        'westerns, comedy, and historical and adventure novels for adults - and travel writing and memoirs by men.',
     'robert': 'A man narrates in a deep, grave, weathered voice - for epics, tragedy, sea and war stories, gothic horror, ' +
         'classical philosophy, and ancient texts.',
     'michael': 'A man narrates in a young, bright, energetic voice - for boys\' adventures, children\'s books, science fiction ' +

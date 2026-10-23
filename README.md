@@ -65,7 +65,7 @@ PicoShelf is a [javascript-build](https://github.com/craigahobbs/javascript-buil
 catalog of 5,000 books (`--books`): every Standard Ebooks book, and Project Gutenberg's books chosen by genre. Each
 genre gets a share of the catalog by the square root of its popularity (its Gutenberg candidates' downloads) and at
 least 40 books, filled with its most-downloaded books - so popular genres get more books, and small ones aren't
-starved. The candidates are the 8,000 most-downloaded English Gutenberg books (`--gutenberg`) in the GITenberg mirror
+starved. The candidates are the 16,000 most-downloaded English Gutenberg books (`--gutenberg`) in the GITenberg mirror
 (the app reads Gutenberg's texts there - gutenberg.org doesn't allow browsers to fetch them), from Gutenberg's own
 catalog file (`rdf-files.tar.bz2`), without reference works, Standard Ebooks duplicates, or less popular editions.
 
