@@ -26,7 +26,7 @@ const ollama = fakeOllama((name, body) => bookProbabilities[body.state.title]);
 
 
 // The fake Ollama server, for the command line's child processes
-let server;
+const server = await ollamaServer(ollama);
 
 
 // The test catalog
@@ -38,9 +38,8 @@ const catalogBooks = [
 ];
 
 
-before(async () => {
+before(() => {
     writeFileSync(catalogPath, JSON.stringify({'books': catalogBooks}));
-    server = await ollamaServer(ollama);
 });
 
 

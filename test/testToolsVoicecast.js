@@ -50,7 +50,7 @@ const ollama = fakeOllama((name, body) => {
 
 
 // The fake Ollama server, for the command line's child processes
-let server;
+const server = await ollamaServer(ollama);
 
 
 // The test catalog
@@ -65,10 +65,9 @@ const labelsCatalogPath = join(tempDir, 'labelsCatalog.json');
 const labelsCatalogBooks = labels.map(({source, id, title, author}) => ({source, id, title, author, 'description': `${source}|${id}`}));
 
 
-before(async () => {
+before(() => {
     writeFileSync(catalogPath, JSON.stringify({'books': catalogBooks}));
     writeFileSync(labelsCatalogPath, JSON.stringify({'books': labelsCatalogBooks}));
-    server = await ollamaServer(ollama);
 });
 
 
