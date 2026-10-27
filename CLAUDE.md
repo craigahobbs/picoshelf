@@ -12,6 +12,7 @@ skill before running tests, lint, coverage, or changing the Makefile:
 Local Makefile overrides:
 
 - `GHPAGES_SRC` - `build/app/`
+- `NODE_IMAGE` - `node:current` (not slim - the catalog builder and its tests need tar's `bzip2`)
 - `USE_JSDOM` - jsdom is a development dependency (the app's tests, and `tools/catalog.js`)
 - `ESLINT_ARGS` - also `tools/`
 - `C8_ARGS` - also `tools/` (100% coverage of the catalog builder too)

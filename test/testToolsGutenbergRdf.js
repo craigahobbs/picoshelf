@@ -200,7 +200,7 @@ test('readArchive', async () => {
 test('readArchive, error', async () => {
     const archivePath = join(tempDir, 'readArchive', 'missing.tar.bz2');
     await assert.rejects(readArchive(archivePath), (error) => {
-        assert.match(error.message, /^tar .+missing\.tar\.bz2: tar: \S/);
+        assert.match(error.message, /^tar .+missing\.tar\.bz2: tar( \(child\))?: \S/);
         return true;
     });
 });

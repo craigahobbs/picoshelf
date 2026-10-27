@@ -16,6 +16,11 @@ $(eval $(call WGET, https://craigahobbs.github.io/javascript-build/eslint.config
 GHPAGES_SRC := build/app/
 
 
+# The container's Node (USE_DOCKER/USE_PODMAN) - the full image, as the catalog builder reads Gutenberg's archive with
+# tar's bzip2, which the slim image lacks
+NODE_IMAGE := node:current
+
+
 # Include javascript-build
 USE_JSDOM := 1
 include Makefile.base
