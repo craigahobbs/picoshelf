@@ -14,7 +14,7 @@
         "url": "https://github.com/craigahobbs"
     },
     "dependencies": {
-        "picovox": "~1.6"
+        "picovox": "~2.0"
     },
     "devDependencies": {
         "@eslint/js": "~10.0",

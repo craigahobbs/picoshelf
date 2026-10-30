@@ -1,6 +1,7 @@
 import {loadNeuralModel, picovoxVoice} from '../lib/worker.js';
 import {modelLoader, paragraphPause, sentenceFrames, sentencePause, spanFrames} from 'picovox/lib/synthesis.js';
 import {strict as assert} from 'node:assert';
+import {loadG2p} from 'picovox/lib/g2p.js';
 import {paragraphBeats} from 'picovox/lib/style.js';
 import test from 'node:test';
 
@@ -432,18 +433,20 @@ test('worker, model errors', async () => {
     const {posted} = failing.self;
     posted.length = 0;
 
-    // The G2P network fails to load
-    failing.send({'type': 'models', 'g2pModel': {'design': 'other'}, 'voiceModel': {'manifest': null, 'encoding': 'other', 'weights': ''}});
+    // The G2P network fails to load - the worker posts PicoVox's error, with its stack
+    const badG2pModel = {'design': 'other'};
+    const g2pError = await loadG2p(badG2pModel).catch((error) => error);
+    failing.send({'type': 'models', 'g2pModel': badG2pModel, 'voiceModel': {'manifest': null, 'encoding': 'other', 'weights': ''}});
     await waitFor(() => untraced(posted).length === 1);
     const [loadError] = untraced(posted);
-    assert.match(loadError.message, /^Unsupported G2P model design other \(Error: /);
+    assert.ok(loadError.message.startsWith(`${g2pError.message} (${g2pError.name}: `));
 
     // A run fails
     posted.length = 0;
     failing.send({'type': 'units', 'id': 60, 'units': [{'index': 0, 'text': 'One.'}], 'voice': 'neural-male', 'rate': 1});
     await waitFor(() => untraced(posted).length === 1);
     const [runError] = untraced(posted);
-    assert.match(runError.message, /^Unsupported G2P model design other/);
+    assert.ok(runError.message.startsWith(g2pError.message));
 
     // The voice model fails to load
     posted.length = 0;
