@@ -82,9 +82,9 @@ candidates tried, and why any were turned away.
 
 Each book's default narrator is cast by a local [Ollama](https://ollama.com) decision model,
 `kev:9b-nvfp4` (`ollama pull kev:9b-nvfp4`, with Ollama running): it answers a choice of the ten designed voices, each
-with casting notes, about the book's title, author, subjects, and description - Jane Austen gets Helen, a composed,
-refined voice, and Moby Dick gets Robert, a deep, weathered one. The casts are cached by model and book, so a rebuild
-casts only new or changed books. `node tools/voicecast.js --eval --model <model>` scores a decision model on the
+with casting notes fitted to how PicoVox 2.0 speaks it, about the book's title, author, subjects, and description - Pride
+and Prejudice gets Helen, a low, grounded voice, and Moby Dick gets Robert, a deep, grave one. The casts are cached by model,
+casting notes, and book, so a rebuild casts only new or changed books. `node tools/voicecast.js --eval --model <model>` scores a decision model on the
 hand-cast books; `--book <title>` shows a book's cast. A listener's voice and speed for a book override its defaults
 (the cast voice, at 1×), and the Narrator sheet resets them.
 

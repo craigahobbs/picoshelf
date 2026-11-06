@@ -64,9 +64,9 @@
   "title": "The Eleventh Virgin",
   "author": "Dorothy Day",
   "voices": [
-   "sarah",
+   "kate",
    "amy",
-   "kate"
+   "sarah"
   ]
  },
  {
@@ -115,8 +115,9 @@
   "author": "William Shakespeare",
   "voices": [
    "james",
+   "thomas",
    "michael",
-   "sarah",
+   "kate",
    "amy"
   ]
  },
@@ -168,10 +169,10 @@
   "title": "Strong Poison",
   "author": "Dorothy L. Sayers",
   "voices": [
-   "kate",
+   "sarah",
    "david",
    "james",
-   "sarah"
+   "kate"
   ]
  },
  {
@@ -197,11 +198,10 @@
  {
   "source": "standardebooks",
   "id": "/ebooks/lord-dunsany/the-gods-of-pegana",
-  "title": "The Gods of Peg\u0101na",
+  "title": "The Gods of Pegāna",
   "author": "Lord Dunsany",
   "voices": [
-   "robert",
-   "thomas"
+   "robert"
   ]
  },
  {
@@ -210,9 +210,8 @@
   "title": "The Hill of Dreams",
   "author": "Arthur Machen",
   "voices": [
-   "thomas",
-   "james",
-   "robert"
+   "robert",
+   "james"
   ]
  },
  {
@@ -221,14 +220,14 @@
   "title": "Poetry",
   "author": "John Keats",
   "voices": [
-   "thomas"
+   "robert"
   ]
  },
  {
   "source": "gutenberg",
   "id": "48438",
   "title": "Rizal's Own Story of His Life",
-  "author": "Jos\u00e9 Rizal",
+  "author": "José Rizal",
   "voices": [
    "david",
    "james"
@@ -247,7 +246,7 @@
  {
   "source": "standardebooks",
   "id": "/ebooks/marmaduke-pickthall/said-the-fisherman",
-  "title": "Sa\u00efd the Fisherman",
+  "title": "Saïd the Fisherman",
   "author": "Marmaduke Pickthall",
   "voices": [
    "james",
@@ -258,7 +257,7 @@
   "source": "standardebooks",
   "id": "/ebooks/rene-descartes/philosophical-works/john-veitch",
   "title": "Philosophical Works",
-  "author": "Ren\u00e9 Descartes",
+  "author": "René Descartes",
   "voices": [
    "robert",
    "david"
@@ -271,7 +270,7 @@
   "author": "Theodore Dreiser",
   "voices": [
    "james",
-   "sarah"
+   "kate"
   ]
  },
  {
@@ -290,8 +289,7 @@
   "title": "The Ballad of the White Horse",
   "author": "G. K. Chesterton",
   "voices": [
-   "robert",
-   "thomas"
+   "robert"
   ]
  },
  {
@@ -319,7 +317,7 @@
   "title": "Poetry",
   "author": "Thomas Gray",
   "voices": [
-   "thomas"
+   "robert"
   ]
  },
  {
@@ -329,15 +327,15 @@
   "author": "E. Nesbit",
   "voices": [
    "amy",
-   "sarah",
+   "kate",
    "michael"
   ]
  },
  {
   "source": "standardebooks",
   "id": "/ebooks/mor-jokai/midst-the-wild-carpathians/robert-nisbet-bain",
-  "title": "\u2019Midst the Wild Carpathians",
-  "author": "M\u00f3r J\u00f3kai",
+  "title": "’Midst the Wild Carpathians",
+  "author": "Mór Jókai",
   "voices": [
    "robert",
    "james"
@@ -359,7 +357,8 @@
   "title": "David Harum",
   "author": "Edward Noyes Westcott",
   "voices": [
-   "james"
+   "james",
+   "thomas"
   ]
  },
  {
@@ -379,7 +378,6 @@
   "title": "The Pursuit of God",
   "author": "A. W. Tozer",
   "voices": [
-   "thomas",
    "robert"
   ]
  },
@@ -418,8 +416,7 @@
   "title": "The Story of Genesis and Exodus",
   "author": "",
   "voices": [
-   "robert",
-   "thomas"
+   "robert"
   ]
  },
  {
@@ -447,16 +444,16 @@
   "title": "The Complete Works of John Gower, Volume 2",
   "author": "John Gower",
   "voices": [
-   "robert",
-   "thomas"
+   "robert"
   ]
  },
  {
   "source": "standardebooks",
   "id": "/ebooks/alain-rene-lesage/gil-blas/tobias-smollett",
   "title": "Gil Blas",
-  "author": "Alain-Ren\u00e9 Lesage",
+  "author": "Alain-René Lesage",
   "voices": [
+   "thomas",
    "michael",
    "james"
   ]
@@ -467,7 +464,7 @@
   "title": "Poetry",
   "author": "Ameen Rihani",
   "voices": [
-   "thomas"
+   "robert"
   ]
  },
  {
@@ -486,7 +483,7 @@
   "title": "Flight",
   "author": "Walter White",
   "voices": [
-   "sarah",
+   "kate",
    "james"
   ]
  },
@@ -496,9 +493,9 @@
   "title": "A Strange Disappearance",
   "author": "Anna Katharine Green",
   "voices": [
-   "kate",
+   "sarah",
    "david",
-   "sarah"
+   "kate"
   ]
  },
  {
@@ -508,7 +505,7 @@
   "author": "Edith Wharton",
   "voices": [
    "helen",
-   "sarah"
+   "kate"
   ]
  },
  {
@@ -517,7 +514,7 @@
   "title": "The Triumph of the Scarlet Pimpernel",
   "author": "Baroness Orczy",
   "voices": [
-   "sarah",
+   "kate",
    "james",
    "helen"
   ]
@@ -537,9 +534,9 @@
   "source": "standardebooks",
   "id": "/ebooks/honore-de-balzac/a-woman-of-thirty/ellen-marriage",
   "title": "A Woman of Thirty",
-  "author": "Honor\u00e9 de Balzac",
+  "author": "Honoré de Balzac",
   "voices": [
-   "sarah",
+   "kate",
    "helen",
    "james"
   ]
@@ -552,7 +549,7 @@
   "voices": [
    "david",
    "robert",
-   "kate"
+   "sarah"
   ]
  },
  {
@@ -593,7 +590,7 @@
   "title": "My Own Story",
   "author": "Emmeline Pankhurst",
   "voices": [
-   "kate",
+   "sarah",
    "helen"
   ]
  },
@@ -604,6 +601,7 @@
   "author": "George Bernard Shaw",
   "voices": [
    "james",
+   "thomas",
    "david"
   ]
  },
@@ -623,8 +621,8 @@
   "title": "Revolving Lights",
   "author": "Dorothy M. Richardson",
   "voices": [
-   "sarah",
    "kate",
+   "sarah",
    "helen"
   ]
  },
@@ -666,6 +664,7 @@
   "author": "William Shakespeare",
   "voices": [
    "james",
+   "thomas",
    "michael"
   ]
  },
@@ -675,7 +674,7 @@
   "title": "A Voice from the South",
   "author": "Anna Julia Cooper",
   "voices": [
-   "kate",
+   "sarah",
    "helen"
   ]
  },
@@ -694,7 +693,7 @@
   "title": "Iola Leroy",
   "author": "Frances Ellen Watkins Harper",
   "voices": [
-   "sarah",
+   "kate",
    "helen"
   ]
  },
@@ -732,7 +731,7 @@
   "source": "standardebooks",
   "id": "/ebooks/jose-rizal/noli-me-tangere/charles-e-derbyshire",
   "title": "Noli Me Tangere",
-  "author": "Jos\u00e9 Rizal",
+  "author": "José Rizal",
   "voices": [
    "james",
    "robert"
@@ -753,7 +752,7 @@
   "title": "The Horsewoman",
   "author": "Alice M. Hayes",
   "voices": [
-   "kate"
+   "sarah"
   ]
  },
  {
@@ -763,8 +762,8 @@
   "author": "Agatha Christie",
   "voices": [
    "amy",
-   "sarah",
-   "kate"
+   "kate",
+   "sarah"
   ]
  },
  {
@@ -791,12 +790,12 @@
  {
   "source": "gutenberg",
   "id": "25789",
-  "title": "Emily Bront\u00eb",
+  "title": "Emily Brontë",
   "author": "A. Mary F. Robinson",
   "voices": [
    "helen",
-   "kate",
-   "sarah"
+   "sarah",
+   "kate"
   ]
  },
  {
@@ -805,6 +804,7 @@
   "title": "Love Among the Chickens",
   "author": "P. G. Wodehouse",
   "voices": [
+   "thomas",
    "michael",
    "james"
   ]
@@ -852,11 +852,11 @@
  {
   "source": "standardebooks",
   "id": "/ebooks/honore-de-balzac/ursule-mirouet/clara-bell",
-  "title": "Ursule Mirou\u00ebt",
-  "author": "Honor\u00e9 de Balzac",
+  "title": "Ursule Mirouët",
+  "author": "Honoré de Balzac",
   "voices": [
    "james",
-   "sarah"
+   "kate"
   ]
  },
  {
@@ -877,7 +877,7 @@
   "voices": [
    "james",
    "helen",
-   "sarah"
+   "kate"
   ]
  },
  {
@@ -886,7 +886,7 @@
   "title": "Thelma",
   "author": "Marie Corelli",
   "voices": [
-   "sarah",
+   "kate",
    "helen"
   ]
  },
@@ -897,7 +897,7 @@
   "author": "Frances Hodgson Burnett",
   "voices": [
    "amy",
-   "sarah"
+   "kate"
   ]
  },
  {
@@ -946,8 +946,7 @@
   "title": "The Divine Comedy of Dante Alighieri",
   "author": "Dante Alighieri",
   "voices": [
-   "robert",
-   "thomas"
+   "robert"
   ]
  },
  {
@@ -958,7 +957,7 @@
   "voices": [
    "david",
    "james",
-   "kate"
+   "sarah"
   ]
  },
  {
@@ -977,7 +976,7 @@
   "title": "The Unpleasantness at the Bellona Club",
   "author": "Dorothy L. Sayers",
   "voices": [
-   "kate",
+   "sarah",
    "david",
    "james"
   ]
@@ -998,8 +997,7 @@
   "title": "De Profundis",
   "author": "Oscar Wilde",
   "voices": [
-   "robert",
-   "thomas"
+   "robert"
   ]
  },
  {
@@ -1019,8 +1017,8 @@
   "author": "Jane Austen",
   "voices": [
    "helen",
-   "kate",
-   "sarah"
+   "sarah",
+   "kate"
   ]
  },
  {
@@ -1036,9 +1034,9 @@
   "source": "standardebooks",
   "id": "/ebooks/charlotte-bronte/jane-eyre",
   "title": "Jane Eyre",
-  "author": "Charlotte Bront\u00eb",
+  "author": "Charlotte Brontë",
   "voices": [
-   "sarah",
+   "kate",
    "helen"
   ]
  },
@@ -1058,7 +1056,6 @@
   "title": "Leaves of Grass",
   "author": "Walt Whitman",
   "voices": [
-   "thomas",
    "robert"
   ]
  },
@@ -1075,7 +1072,7 @@
  {
   "source": "standardebooks",
   "id": "/ebooks/lewis-carroll/alices-adventures-in-wonderland/john-tenniel",
-  "title": "Alice\u2019s Adventures in Wonderland",
+  "title": "Alice’s Adventures in Wonderland",
   "author": "Lewis Carroll",
   "voices": [
    "amy"
@@ -1088,7 +1085,7 @@
   "author": "Louisa May Alcott",
   "voices": [
    "amy",
-   "sarah"
+   "kate"
   ]
  },
  {
@@ -1115,7 +1112,7 @@
   "title": "Walden",
   "author": "Henry David Thoreau",
   "voices": [
-   "thomas",
+   "robert",
    "james"
   ]
  },
@@ -1135,7 +1132,6 @@
   "title": "Meditations",
   "author": "Marcus Aurelius",
   "voices": [
-   "thomas",
    "robert"
   ]
  },
@@ -1146,17 +1142,17 @@
   "author": "Jane Austen",
   "voices": [
    "helen",
-   "sarah",
-   "kate"
+   "kate",
+   "sarah"
   ]
  },
  {
   "source": "standardebooks",
   "id": "/ebooks/emily-bronte/wuthering-heights",
   "title": "Wuthering Heights",
-  "author": "Emily Bront\u00eb",
+  "author": "Emily Brontë",
   "voices": [
-   "sarah",
+   "kate",
    "helen"
   ]
  },
@@ -1185,7 +1181,7 @@
   "title": "A Vindication of the Rights of Woman",
   "author": "Mary Wollstonecraft",
   "voices": [
-   "kate",
+   "sarah",
    "helen"
   ]
  },
@@ -1196,7 +1192,7 @@
   "author": "George Eliot",
   "voices": [
    "helen",
-   "sarah"
+   "kate"
   ]
  },
  {
@@ -1233,7 +1229,7 @@
   "author": "Frances Hodgson Burnett",
   "voices": [
    "amy",
-   "sarah"
+   "kate"
   ]
  },
  {
@@ -1243,7 +1239,7 @@
   "author": "Virginia Woolf",
   "voices": [
    "helen",
-   "sarah"
+   "kate"
   ]
  },
  {
@@ -1273,7 +1269,7 @@
   "author": "Kenneth Grahame",
   "voices": [
    "james",
-   "thomas",
+   "robert",
    "michael"
   ]
  },
@@ -1281,7 +1277,7 @@
   "source": "standardebooks",
   "id": "/ebooks/niccolo-machiavelli/the-prince/w-k-marriott",
   "title": "The Prince",
-  "author": "Niccol\u00f2 Machiavelli",
+  "author": "Niccolò Machiavelli",
   "voices": [
    "david",
    "robert"
@@ -1303,7 +1299,7 @@
   "author": "Jane Austen",
   "voices": [
    "helen",
-   "sarah"
+   "kate"
   ]
  },
  {
@@ -1318,10 +1314,10 @@
  {
   "source": "standardebooks",
   "id": "/ebooks/harriet-beecher-stowe/uncle-toms-cabin",
-  "title": "Uncle Tom\u2019s Cabin",
+  "title": "Uncle Tom’s Cabin",
   "author": "Harriet Beecher Stowe",
   "voices": [
-   "sarah",
+   "kate",
    "helen"
   ]
  }

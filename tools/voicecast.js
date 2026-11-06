@@ -1,19 +1,17 @@
 // Cast each catalog book's narrator - a local Ollama decision model chooses the PicoVox voice that suits the book (its
-// author, narrator, genre, and tone): Jane Austen a composed, proper woman's voice, Moby Dick a deep, weathered man's.
+// author, narrator, genre, and tone): Pride and Prejudice a low, grounded woman's voice, Moby Dick a deep, grave man's.
 // The decision model answers a typed choice question about the book's catalog entry with each voice's probability, in
 // one forward pass (tools/decide.js).
 //
-// node tools/voicecast.js [--model <model>] [--scheme <scheme>] [--eval] [--book <title>]
+// node tools/voicecast.js [--model <model>] [--eval] [--book <title>]
 //
 //   --model <model>    the Ollama decision model (default tools/decide.js's)
-//   --scheme <scheme>  the questions - "voice" (one choice of the ten voices, the default) or "split" (the narrator's
-//                      sex and the voice's style, two questions)
 //   --eval             score the model on the hand-cast books (tools/voicelabels.json) - each book's best voice first,
 //                      then the others that suit it
 //   --book <title>     cast the catalog books whose title contains this
 //
 // The catalog builder (tools/catalog.js) casts every book; each cast is cached under cache/catalog/voices/ by model,
-// scheme, and the book's details, so a rebuild casts only new or changed books.
+// the question (the voices' casting notes), and the book's details, so a rebuild casts only new or changed books.
 
 import {catalogBooks, checkModel, decide, decideBooks, decisionModel, root} from './decide.js';
 import {fileURLToPath} from 'node:url';
@@ -22,102 +20,64 @@ import process from 'node:process';
 import {readFileSync} from 'node:fs';
 
 
-// The default questions
-export const castScheme = 'voice';
-
 // The voice question's instructions
 const castInstructions = 'Cast the narrator of this audiobook: which voice best suits the book - its author, its narrator or ' +
     'main character, its genre, and its tone?';
 
-// The voices and their casting notes - PicoShelf's voice keys (PicoVox's designed voices)
+// The voices and their casting notes - PicoShelf's voice keys (PicoVox's designed voices). Each note fits the voice as
+// PicoVox 2.0 speaks it (its description, and its pace and pitch on PicoVox's panel texts): Kate is the slowest, most
+// expressive woman's voice and Sarah a quicker, decisive one; Robert is the deepest and steadiest man's voice, Thomas a
+// fast, lively one, and David the fastest.
 export const castVoices = {
-    'sarah': 'A woman narrates in a warm, unhurried storyteller\'s voice - for novels and stories told by or centered on a ' +
-        'woman: family and domestic life, hardship, coming of age, and passionate drama.',
-    'helen': 'A woman narrates in a mature, composed, refined, and proper voice with quiet authority - for novels of manners, ' +
-        'courtship, and polite society, serious literary fiction by women, and weighty nonfiction by women.',
-    'amy': 'A woman narrates in a young, bright, lively voice - for children\'s books, fairy tales, girls\' stories, and ' +
+    'sarah': 'A woman narrates in a brisk, bright, decisive voice - for books written by women: detective and mystery stories ' +
+        '(such as Agatha Christie\'s), and nonfiction - essays, argument, women\'s rights, history, memoir, and how-to.',
+    'helen': 'A woman narrates in a low, grounded, sincere voice with quiet authority - for novels of manners, courtship, and ' +
+        'polite society, serious literary fiction by women, and weighty nonfiction by women.',
+    'amy': 'A woman narrates in a young, playful, upbeat voice - for children\'s books, fairy tales, girls\' stories, and ' +
         'light-hearted comedy.',
-    'kate': 'A woman narrates in a brisk, crisp, articulate voice - for nonfiction by women (essays, argument, history, ' +
-        'how-to) and mysteries by women.',
-    'grace': 'A woman narrates in a gentle, soft, slow voice - for poetry by women, devotional and spiritual writing, and ' +
+    'kate': 'A woman narrates in a settled, kind, unhurried storyteller\'s voice - for novels and stories told by or centered ' +
+        'on a woman: family and domestic life, hardship, coming of age, and passionate drama.',
+    'grace': 'A woman narrates in a soft, relaxed, gentle voice - for poetry by women, devotional and spiritual writing, and ' +
         'quiet bedtime reading.',
-    'james': 'A man narrates in a warm, relaxed storyteller\'s voice - for novels and stories by men: literary fiction, ' +
-        'westerns, comedy, and historical and adventure novels for adults - and travel writing and memoirs by men.',
-    'robert': 'A man narrates in a deep, grave, weathered voice - for epics, tragedy, sea and war stories, gothic horror, ' +
-        'classical philosophy, and ancient texts.',
-    'michael': 'A man narrates in a young, bright, energetic voice - for boys\' adventures, children\'s books, science fiction ' +
-        'and fantasy adventure, and farce.',
-    'david': 'A man narrates in a brisk, clear, matter-of-fact voice - for nonfiction by men (science, history, politics, ' +
-        'essays) and detective and mystery stories.',
-    'thomas': 'A man narrates in a gentle, soft, slow voice - for poetry by men, meditations, spiritual writing, and nature ' +
-        'writing.'
+    'james': 'A man narrates in a resonant, decisive storyteller\'s voice - for literary fiction, westerns, and historical and ' +
+        'adventure novels by men, and travel writing and memoirs by men.',
+    'robert': 'A man narrates in a deep, grave, steady voice - for epics, tragedy, sea and war stories, gothic horror and ' +
+        'dark tales, classical philosophy, and ancient texts, and for poetry, meditations, spiritual writing, and nature ' +
+        'writing by men.',
+    'michael': 'A man narrates in a young, buoyant, playful voice - for boys\' adventures, children\'s books, and science ' +
+        'fiction and fantasy adventure.',
+    'david': 'A man narrates in a punchy, crisp, quick voice - for books written by men: detective, mystery, and crime stories ' +
+        '(such as Arthur Conan Doyle\'s), and nonfiction - science, history, biography, politics, and essays.',
+    'thomas': 'A man narrates in a high-energy, encouraging voice - for comedy, farce, and humor by men, sports, and ' +
+        'inspirational and self-help writing.'
 };
 
-// The split scheme's questions - the narrator's sex, and the voice's style - and their voices
-const sexCriteria = {
-    'female': 'A woman should narrate - the author is a woman, or the book is told by or centered on a woman or girl.',
-    'male': 'A man should narrate - the author is a man, or the book is told by or centered on a man or boy.'
-};
-const styleCriteria = {
-    'storyteller': 'A warm, unhurried storyteller - for novels and stories: literary fiction, romance, family life, westerns, ' +
-        'comedy, and historical novels.',
-    'grave': 'A mature, deep, grave voice with authority - for epics, tragedy, sea and war stories, gothic horror, novels of ' +
-        'manners and high society, philosophy, and ancient texts.',
-    'young': 'A young, bright, lively voice - for children\'s books, fairy tales, boys\' and girls\' adventures, science fiction ' +
-        'and fantasy adventure, and farce.',
-    'brisk': 'A brisk, crisp, matter-of-fact voice - for nonfiction (science, history, politics, essays, how-to) and detective ' +
-        'and mystery stories.',
-    'gentle': 'A gentle, soft, slow voice - for poetry, meditations, devotional and spiritual writing, and nature writing.'
-};
-const splitVoices = {
-    'female': {'storyteller': 'sarah', 'grave': 'helen', 'young': 'amy', 'brisk': 'kate', 'gentle': 'grace'},
-    'male': {'storyteller': 'james', 'grave': 'robert', 'young': 'michael', 'brisk': 'david', 'gentle': 'thomas'}
-};
+// The women's voices
+const femaleVoices = ['sarah', 'helen', 'amy', 'kate', 'grace'];
 
-// The schemes' questions
-const schemeQuestions = {
-    'voice': {
-        'voice': {'type': 'choice', 'instructions': castInstructions, 'criteria': castVoices}
-    },
-    'split': {
-        'sex': {'type': 'choice', 'instructions': 'Should a woman or a man narrate this audiobook?', 'criteria': sexCriteria},
-        'style': {
-            'type': 'choice', 'instructions': 'Which narrator\'s voice best suits this audiobook\'s genre and tone?',
-            'criteria': styleCriteria
-        }
-    }
+// The cast question
+const castQuestions = {
+    'voice': {'type': 'choice', 'instructions': castInstructions, 'criteria': castVoices}
 };
 
 
 // Cast a book - {voice, probabilities (each voice's)}
-export async function castBook(book, {model, scheme}) {
-    return castAnswer(await decide(book, {model, 'questions': schemeQuestions[scheme]}), scheme);
+export async function castBook(book, {model}) {
+    return castAnswer(await decide(book, {model, 'questions': castQuestions}));
 }
 
 
 // A cast from the answers - {voice, probabilities}
-function castAnswer(answers, scheme) {
-    if (scheme === 'voice') {
-        return {'voice': answers.voice.choice, 'probabilities': answers.voice.probabilities};
-    }
-
-    // The split scheme - each voice's probability is its sex's times its style's
-    const probabilities = {};
-    for (const [sex, styles] of Object.entries(splitVoices)) {
-        for (const [style, voice] of Object.entries(styles)) {
-            probabilities[voice] = answers.sex.probabilities[sex] * answers.style.probabilities[style];
-        }
-    }
-    const voice = Object.keys(probabilities).reduce((best, key) => (probabilities[key] > probabilities[best] ? key : best));
-    return {voice, probabilities};
+function castAnswer(answers) {
+    return {'voice': answers.voice.choice, 'probabilities': answers.voice.probabilities};
 }
 
 
-// Cast books - each book's voice key, by "source|id". Casts are cached by model, scheme, and the book's state.
-export async function castBooks(books, {model, scheme = castScheme, log}) {
+// Cast books - each book's voice key, by "source|id". Casts are cached by model, the question, and the book's state.
+export async function castBooks(books, {model, log}) {
     const casts = await decideBooks(books, {
-        model, 'questions': schemeQuestions[scheme], 'answer': (answers) => castAnswer(answers, scheme),
-        'cacheName': `voices/${model.replace(/[^a-zA-Z0-9.-]/g, '_')}-${scheme}`, 'label': 'Voices', log
+        model, 'questions': castQuestions, 'answer': castAnswer,
+        'cacheName': `voices/${model.replace(/[^a-zA-Z0-9.-]/g, '_')}`, 'label': 'Voices', log
     });
     return Object.fromEntries(Object.entries(casts).map(([key, cast]) => [key, cast.voice]));
 }
@@ -125,23 +85,23 @@ export async function castBooks(books, {model, scheme = castScheme, log}) {
 
 // Score a model on the hand-cast books - the share cast with the best voice, with a voice that suits, and with the
 // right sex
-async function evaluate(model, scheme) {
+async function evaluate(model) {
     await checkModel(model);
     // The hand-cast books in the catalog (a book the catalog has left out has no details to cast it by)
     const books = new Map(catalogBooks().map((book) => [`${book.source}|${book.id}`, book]));
     const allLabels = JSON.parse(readFileSync(join(root, 'tools', 'voicelabels.json'), 'utf-8'));
     const labels = allLabels.filter((label) => books.has(`${label.source}|${label.id}`));
-    const female = new Set(Object.values(splitVoices.female));
+    const female = new Set(femaleVoices);
 
     // Warm the model, then cast each book
-    await castBook(books.get(`${labels[0].source}|${labels[0].id}`), {model, scheme});
+    await castBook(books.get(`${labels[0].source}|${labels[0].id}`), {model});
     let best = 0;
     let suits = 0;
     let sex = 0;
     const misses = [];
     const start = Date.now();
     for (const label of labels) {
-        const {voice} = await castBook(books.get(`${label.source}|${label.id}`), {model, scheme});
+        const {voice} = await castBook(books.get(`${label.source}|${label.id}`), {model});
         best += voice === label.voices[0] ? 1 : 0;
         suits += label.voices.includes(voice) ? 1 : 0;
         sex += female.has(voice) === female.has(label.voices[0]) ? 1 : 0;
@@ -151,7 +111,7 @@ async function evaluate(model, scheme) {
     }
     const milliseconds = (Date.now() - start) / labels.length;
     const percent = (count) => `${(100 * count / labels.length).toFixed(1)}%`;
-    process.stdout.write(`${model} ${scheme}: best ${percent(best)}, suits ${percent(suits)}, sex ${percent(sex)}, ` +
+    process.stdout.write(`${model}: best ${percent(best)}, suits ${percent(suits)}, sex ${percent(sex)}, ` +
         `${milliseconds.toFixed(0)} ms a book (${labels.length} books)\n`);
     for (const miss of misses) {
         process.stdout.write(`    ${miss}\n`);
@@ -167,14 +127,11 @@ async function evaluate(model, scheme) {
 async function main() {
     const args = process.argv.slice(2);
     let model = decisionModel;
-    let scheme = castScheme;
     let title = '';
     let evalMode = false;
     for (let ix = 0; ix < args.length; ix++) {
         if (args[ix] === '--model') {
             model = args[++ix];
-        } else if (args[ix] === '--scheme') {
-            scheme = args[++ix];
         } else if (args[ix] === '--eval') {
             evalMode = true;
         } else if (args[ix] === '--book') {
@@ -183,16 +140,13 @@ async function main() {
             throw new Error(`Unknown argument "${args[ix]}"`);
         }
     }
-    if (!(scheme in schemeQuestions)) {
-        throw new Error(`Unknown scheme "${scheme}"`);
-    }
     if (evalMode) {
-        await evaluate(model, scheme);
+        await evaluate(model);
         return;
     }
     await checkModel(model);
     for (const book of catalogBooks().filter((item) => item.title.toLowerCase().includes(title))) {
-        const {voice, probabilities} = await castBook(book, {model, scheme});
+        const {voice, probabilities} = await castBook(book, {model});
         const odds = Object.entries(probabilities).sort((first, second) => second[1] - first[1]).slice(0, 3)
             .map(([key, probability]) => `${key} ${(100 * probability).toFixed(0)}%`).join(', ');
         process.stdout.write(`${book.title} (${book.author}): ${voice} - ${odds}\n`);
