@@ -503,9 +503,9 @@ test('Engine, load', async (testContext) => {
         {
             'type': 'units', 'id': 1, 'voice': 'neural-male', 'rate': 1,
             'units': [
-                {'index': 0, 'text': 'One fish.', 'paragraphStart': true, 'spans': null, 'beat': null},
-                {'index': 1, 'text': 'Two fish.', 'paragraphStart': false, 'spans': null, 'beat': null},
-                {'index': 2, 'text': 'Red fish.', 'paragraphStart': false, 'spans': null, 'beat': null}
+                {'index': 0, 'text': 'One fish.', 'paragraphStart': true, 'spans': null},
+                {'index': 1, 'text': 'Two fish.', 'paragraphStart': false, 'spans': null},
+                {'index': 2, 'text': 'Red fish.', 'paragraphStart': false, 'spans': null}
             ]
         }
     ]);
@@ -553,7 +553,7 @@ test('Engine, load', async (testContext) => {
 test('Engine, load expressive', async (testContext) => {
     const {engine, workers} = await setup(testContext, {'nav': {...desktop, 'hardwareConcurrency': 5}});
 
-    // The units are dealt to the two workers in turn - quotations styled, and each with its paragraph's beat
+    // The units are dealt to the two workers in turn - quotations styled
     engine.load('One fish. Two fish.\n\nHe said, "Blue fish!" She left.', {'expressive': true});
     const [units0] = posted(workers[0], 'units');
     const [units1] = posted(workers[1], 'units');
@@ -566,10 +566,6 @@ test('Engine, load expressive', async (testContext) => {
         {'text': 'He said,', 'style': 'neutral'},
         {'text': '"Blue fish!"', 'style': 'exclaim'}
     ]);
-    for (const unit of [...units0.units, ...units1.units]) {
-        assert.ok(Array.isArray(unit.beat.transforms));
-        assert.equal(typeof unit.beat.rate, 'number');
-    }
     assert.deepEqual(posted(workers[1], 'prepare'), [{'type': 'prepare'}]);
 });
 

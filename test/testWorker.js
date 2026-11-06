@@ -2,7 +2,6 @@ import {loadNeuralModel, picovoxVoice} from '../lib/worker.js';
 import {modelLoader, paragraphPause, sentenceFrames, sentencePause, spanFrames} from 'picovox/lib/synthesis.js';
 import {strict as assert} from 'node:assert';
 import {loadG2p} from 'picovox/lib/g2p.js';
-import {paragraphBeats} from 'picovox/lib/style.js';
 import test from 'node:test';
 
 
@@ -303,24 +302,23 @@ test('worker, units', async () => {
 });
 
 
-test('worker, units with spans and beats', async () => {
+test('worker, units with spans', async () => {
     const spans = [{'text': 'Hello,', 'style': 'dialogue'}, {'text': 'he said.', 'style': 'neutral'}];
-    const beats = paragraphBeats([{'index': 0, 'paragraphStart': true}, {'index': 1, 'paragraphStart': false}]);
     const units = [
-        {'index': 3, 'text': '"Hello," he said.', 'paragraphStart': true, spans, 'beat': beats[0]},
-        {'index': 4, 'text': 'Go.', 'paragraphStart': false, 'spans': null, 'beat': beats[1]}
+        {'index': 3, 'text': '"Hello," he said.', 'paragraphStart': true, spans},
+        {'index': 4, 'text': 'Go.', 'paragraphStart': false, 'spans': null}
     ];
     const {posted, rendered} = await runUnits({'id': 6, units, 'voice': 'sarah', 'rate': 1});
     assert.deepEqual(untraced(posted), [{'type': 'unitStart', 'id': 6, 'unit': 3}, {'type': 'unitStart', 'id': 6, 'unit': 4}]);
     const events = traces(posted);
-    assert.match(events[0], /^unit 3: G2P 3 words in \d+ ms \(spans dialogue, neutral\) \(beat pitch 1\.080, rate 1\)$/);
-    assert.match(events[2], /^unit 4: G2P 1 words in \d+ ms \(beat pitch 0\.960, rate 0\.9299+\)$/);
+    assert.match(events[0], /^unit 3: G2P 3 words in \d+ ms \(spans dialogue, neutral\)$/);
+    assert.match(events[2], /^unit 4: G2P 1 words in \d+ ms$/);
 
-    // The spans' frames, in the beat
-    const expected3 = spanFrames(model, spans, {'voice': 'sarah', 'rate': 1, 'beat': beats[0]});
+    // The spans' frames
+    const expected3 = spanFrames(model, spans, {'voice': 'sarah', 'rate': 1});
     assert.deepEqual(rendered[0].message.eq, expected3.eq);
     assert.deepEqual(sentFrames(rendered, 6, 3), [...expected3.chunks].flat());
-    const expected4 = sentenceFrames(model, 'Go.', {'voice': 'sarah', 'rate': 1, 'beat': beats[1]});
+    const expected4 = sentenceFrames(model, 'Go.', {'voice': 'sarah', 'rate': 1});
     assert.deepEqual(sentFrames(rendered, 6, 4), [...expected4.chunks].flat());
 });
 
