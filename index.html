@@ -72,11 +72,12 @@
         padding: calc(env(safe-area-inset-top) + var(--top-gap)) calc(env(safe-area-inset-right) + 16px) calc(env(safe-area-inset-bottom) + 96px) calc(env(safe-area-inset-left) + 16px);
     }
     /* (an iPhone's Home Screen app: iOS 26 and later fade and blur the top of the page, some 40px below the status bar -
-       the system's own effect, above the page, that no style of the page's turns off - so the views start clear of it) */
+       the system's own effect, above the page, that no style of the page's turns off - so the views start further down:
+       below the part of the fade that shows, its faint end aside - starting below all of it left too wide a gap) */
     @media (display-mode: standalone) {
         @supports (-webkit-touch-callout: none) {
             :root {
-                --top-gap: 44px;
+                --top-gap: 30px;
             }
         }
     }
